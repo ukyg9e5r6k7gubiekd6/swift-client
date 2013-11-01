@@ -52,10 +52,11 @@ typedef size_t (*receive_data_func_t)(char *ptr, size_t size, size_t nmemb, void
 struct swift_context_private {
 	CURL *curl;       /* Handle to curl library's easy interface */
 	iconv_t iconv;    /* iconv library's conversion descriptor */
-	char *hostname;   /* hostname or dotted-decimal IP of Swift server */
 	unsigned int ssl; /* True if SSL in use, false otherwise */
 	unsigned int verify_cert_trusted;  /* True if the peer's certificate must chain to a trusted CA, false otherwise */
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
+	char *hostname;   /* hostname or dotted-decimal IP of Swift server */
+	unsigned int api_ver; /* Swift API version */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
 	char *url;        /* The URL currently being used */
@@ -110,9 +111,9 @@ typedef struct swift_context swift_context_t;
 
 /**
  * Begin using this library.
- * The context passed should be zeroed out, unless you wish to over-ride
- * the function pointers within.
- * Function pointers not zeroed out will be given meaningful defaults.
+ * The context passed must be zeroed out, except for the public part,
+ * in which you may want to over-ride the function pointers.
+ * Function pointers left NULL will be given meaningful defaults.
  * This must be called early in the execution of your program,
  * before additional threads (if any) are created.
  * This must be called before any other use of this library by your program.
@@ -145,9 +146,9 @@ void swift_global_cleanup(void);
 enum swift_error swift_start(swift_context_t *context);
 
 /**
- * Case using this library for a single thread.
+ * Cease using this library for a single thread.
  * This must be called by each thread of your program after it is finished using this library.
- * Each thread in your program must call this function precisely once for each successful call
+ * Each thread in your program must call this function precisely once for each successful prior call
  * to swift_start by that thread.
  * After this call, the context is invalid.
  */
@@ -157,6 +158,11 @@ void swift_end(swift_context_t **context);
  * Set the current Swift server hostname.
  */
 enum swift_error swift_set_hostname(swift_context_t *context, const char *hostname);
+
+/**
+ * Set the current Swift API version to be spoken with the server.
+ */
+enum swift_error swift_set_api_version(swift_context_t *context, unsigned int api_version);
 
 /**
  * Control whether the Swift server should be accessed via HTTPS, or just HTTP.

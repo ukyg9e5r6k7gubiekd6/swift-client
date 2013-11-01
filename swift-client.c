@@ -2,6 +2,7 @@
 #include <string.h>
 #include <iconv.h>
 #include <errno.h>
+#include <math.h>
 
 #include "swift-client.h"
 
@@ -227,6 +228,17 @@ swift_set_hostname(swift_context_t *context, const char *hostname)
 }
 
 /**
+ * Set the current Swift API version to be spoken with the server.
+ */
+enum swift_error
+swift_set_api_version(swift_context_t *context, unsigned int api_version)
+{
+	context->pvt.api_ver = api_version;
+
+	return SCERR_SUCCESS;
+}
+
+/**
  * Control whether the Swift server should be accessed via HTTPS, or just HTTP.
  */
 enum swift_error
@@ -293,6 +305,8 @@ make_url(swift_context_t *context)
 		+ (context->pvt.ssl ? 1 : 0) /* 's'? */
 		+ 3 /* "://" */
 		+ strlen(context->pvt.hostname)
+		+ 2 /* "/v" */
+		+ (unsigned int) ceil(log10(context->pvt.api_ver))
 		+ 1 /* '/' */
 		+ strlen(context->pvt.container)
 		+ 1 /* '/' */
@@ -304,9 +318,10 @@ make_url(swift_context_t *context)
 	}
 	sprintf(
 		context->pvt.url,
-		"http%s://%s/%s/%s",
+		"http%s://%s/v%u/%s/%s",
 		(context->pvt.ssl ? "s" : ""),
 		context->pvt.hostname,
+		context->pvt.api_ver,
 		context->pvt.container,
 		context->pvt.object
 	);
@@ -466,8 +481,8 @@ swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names
 		}
 		curl_list = curl_slist_append(curl_list, header);
 	}
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, curl_list);
 	context->deallocator(header);
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, curl_list);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
