@@ -344,7 +344,7 @@ swift_request(swift_context_t *context, enum http_method method)
 }
 
 /**
- * Retrieve an object from Swift.
+ * Retrieve an object from Swift and pass its data to the given callback function.
  */
 enum swift_error
 swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
@@ -354,7 +354,7 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
 }
 
 /**
- * Insert or update an object in Swift.
+ * Insert or update an object in Swift using the data supplied by the given callback function.
  */
 enum swift_error
 swift_put(swift_context_t *context, supply_data_func_t supply_data_callback)
@@ -364,10 +364,12 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback)
 }
 
 /**
- * Insert or update metadata for an object.
+ * Insert or update metadata for the current object.
+ * tuple_count specifies the number of {name, value} tuples to be set.
+ * names and values must be arrays, each of size tuple_count, specifying the {name, value} tuples.
  */
 enum swift_error
-swift_post(swift_context_t *context, wchar_t *name, wchar_t *value)
+swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names, wchar_t **values)
 {
 	assert(context != NULL);
 	/* TODO */
