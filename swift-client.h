@@ -146,6 +146,11 @@ enum swift_error swift_start(swift_context_t *context);
 void swift_end(swift_context_t **context);
 
 /**
+ * Set the current Swift server hostname.
+ */
+enum swift_error swift_set_hostname(swift_context_t context, const char *hostname);
+
+/**
  * Set the name of the current Swift container.
  */
 enum swift_error swift_set_container(swift_context_t *context, wchar_t *container_name);

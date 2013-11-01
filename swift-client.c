@@ -207,6 +207,20 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
 }
 
 /**
+ * Set the current Swift server hostname.
+ */
+enum swift_error
+swift_set_hostname(swift_context_t context, const char *hostname)
+{
+	context->allocator(context->pvt.hostname, strlen(hostname) + 1 /* '\0' */);
+	if (NULL == context->pvt.hostname) {
+		return SCERR_ALLOC_FAILED;
+	}
+	strcpy(context->pvt.hostname, hostname);
+	return SCERR_SUCCESS;
+}
+
+/**
  * Set the name of the current Swift container.
  */
 enum swift_error
