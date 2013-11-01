@@ -60,6 +60,7 @@ struct swift_context_private {
 	char *account;    /* Name of current account */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
+	char *auth_token; /* Authentication token previously obtained from separate authentication service */
 	char *url;        /* The URL currently being used */
 };
 
@@ -186,6 +187,12 @@ enum swift_error swift_verify_cert_hostname(swift_context_t *context, unsigned i
 enum swift_error swift_set_account(swift_context_t *context, wchar_t *account_name);
 
 /**
+ * Set the value of the authentication token to be supplied with requests.
+ * This should have have been obtained previously from a separate authentication service.
+ */
+enum swift_error swift_set_auth_token(swift_context_t *context, char *auth_token);
+
+/**
  * Set the name of the current Swift container.
  */
 enum swift_error swift_set_container(swift_context_t *context, wchar_t *container_name);
@@ -202,14 +209,17 @@ enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive
 
 /**
  * Insert or update an object in Swift using the data supplied by the given callback function.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback);
+enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Insert or update metadata for the current object.
- * tuple_count specifies the number of {name, value} tuples to be set.
- * names and values must be arrays, each of size tuple_count, specifying the {name, value} tuples.
+ * metadata_count specifies the number of {name, value} tuples to be set.
+ * metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names, wchar_t **values);
+enum swift_error swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 #endif /* SWIFT_CLIENT_H_ */

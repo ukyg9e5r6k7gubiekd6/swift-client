@@ -14,6 +14,10 @@
 
 /* Prefix to be prepended to Swift metadata key names in order to generate HTTP headers */
 #define SWIFT_METADATA_PREFIX "X-Object-Meta-"
+/* Name of HTTP header used to pass authentication token to Swift server */
+#define SWIFT_AUTH_HEADER_NAME "X-Auth-Token"
+/* Version of Swift API to be used by default */
+#define DEFAULT_SWIFT_API_VER 1
 
 /**
  * Default handler for libcurl errors.
@@ -115,6 +119,9 @@ swift_start(swift_context_t *context)
 	if (!context->deallocator) {
 		context->deallocator = default_deallocator;
 	}
+	if (!context->pvt.api_ver) {
+		context->pvt.api_ver = DEFAULT_SWIFT_API_VER;
+	}
 	context->pvt.iconv = iconv_open("WCHAR_T", "UTF-8");
 	if ((iconv_t) -1 == context->pvt.iconv) {
 		context->iconv_error("iconv_open", errno);
@@ -162,6 +169,10 @@ swift_end(swift_context_t **context)
 	if ((*context)->pvt.object != NULL) {
 		(*context)->deallocator((*context)->pvt.object);
 		(*context)->pvt.object = NULL;
+	}
+	if ((*context)->pvt.auth_token != NULL) {
+		(*context)->deallocator((*context)->pvt.auth_token);
+		(*context)->pvt.auth_token = NULL;
 	}
 	if (iconv_close((*context)->pvt.iconv) < 0) {
 		(*context)->iconv_error("iconv_close", errno);
@@ -285,6 +296,19 @@ swift_set_account(swift_context_t *context, wchar_t *account_name)
 }
 
 /**
+ * Set the value of the authentication token to be supplied with requests.
+ * This should have been obtained previously from a separate authentication service.
+ */
+enum swift_error
+swift_set_auth_token(swift_context_t *context, char *auth_token)
+{
+	context->pvt.auth_token = context->reallocator(context->pvt.auth_token, strlen(auth_token) + 1 /* '\0' */);
+	strcpy(context->pvt.auth_token, auth_token);
+
+	return SCERR_SUCCESS;
+}
+
+/**
  * Set the name of the current Swift container.
  */
 enum swift_error
@@ -310,6 +334,8 @@ make_url(swift_context_t *context)
 {
 	assert(context != NULL);
 	assert(context->pvt.hostname != NULL);
+	assert(context->pvt.api_ver != 0);
+	assert(context->pvt.account != NULL);
 	assert(context->pvt.container != NULL);
 	assert(context->pvt.object != NULL);
 	context->pvt.url = context->reallocator(
@@ -348,9 +374,11 @@ make_url(swift_context_t *context)
 /**
  * Execute a Swift request using the current protocol, hostname, API version, account, container and object,
  * and using the given HTTP method.
+ * This is the portion of the request code that is common to all Swift API operations.
+ * This function consumes headers.
  */
 static enum swift_error
-swift_request(swift_context_t *context, enum http_method method)
+swift_request(swift_context_t *context, enum http_method method, struct curl_slist *headers)
 {
 	CURLcode curl_err;
 	enum swift_error sc_err;
@@ -370,33 +398,64 @@ swift_request(swift_context_t *context, enum http_method method)
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
 	}
-	curl_easy_setopt(context->pvt.curl, CURLOPT_URL, context->pvt.url);
-	switch (method) {
-	case GET:
-		break; /* this is libcurl's default */
-	case PUT:
-		curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_PUT, 1L);
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_URL, context->pvt.url);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
+	}
+	/* Set HTTP request method */
+	{
+		CURLoption curl_method;
+
+		switch (method) {
+		case GET:
+			curl_method = CURLOPT_HTTPGET;
+			break;
+		case PUT:
+			curl_method = CURLOPT_UPLOAD;
+			break;
+		case POST:
+			curl_method = CURLOPT_POST;
+			break;
+		default:
+			assert(0);
+			break;
+		}
+		curl_err = curl_easy_setopt(context->pvt.curl, curl_method, 1L);
 		if (CURLE_OK != curl_err) {
 			context->curl_error("curl_easy_setopt", curl_err);
 			return SCERR_URL_FAILED;
 		}
-		break;
-	case POST:
-		curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_POST, 1L);
-		if (CURLE_OK != curl_err) {
-			context->curl_error("curl_easy_setopt", curl_err);
-			return SCERR_URL_FAILED;
+	}
+	/* Append common headers to those requested by caller */
+	{
+		char *header = NULL;
+
+		header = context->reallocator(
+			header,
+			strlen(SWIFT_AUTH_HEADER_NAME)
+			+ 2 /* ": " */
+			+ strlen(context->pvt.auth_token)
+			+ 1 /* '\0' */
+		);
+		if (NULL == header) {
+			return SCERR_ALLOC_FAILED;
 		}
-		break;
-	default:
-		assert(0);
-		break;
+		sprintf(header, SWIFT_AUTH_HEADER_NAME ": %s", context->pvt.auth_token);
+		headers = curl_slist_append(headers, header);
+		context->deallocator(header);
+	}
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, headers);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
 	}
 	curl_err = curl_easy_perform(context->pvt.curl);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_perform", curl_err);
 		return SCERR_URL_FAILED;
 	}
+	curl_slist_free_all(headers);
 
 	return SCERR_SUCCESS;
 }
@@ -415,47 +474,20 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
 		return SCERR_URL_FAILED;
 	}
 
-	return swift_request(context, GET);
+	return swift_request(context, GET, NULL);
 }
 
 /**
- * Insert or update an object in Swift using the data supplied by the given callback function.
- */
-enum swift_error
-swift_put(swift_context_t *context, supply_data_func_t supply_data_callback)
-{
-	CURLcode curl_err;
-
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, supply_data_callback);
-	if (CURLE_OK != curl_err) {
-		context->curl_error("curl_easy_setopt", curl_err);
-		return SCERR_URL_FAILED;
-	}
-
-	return swift_request(context, PUT);
-}
-
-/**
- * Insert or update metadata for the current object.
+ * Add Swift metadata headers to a request.
  * tuple_count specifies the number of {name, value} tuples to be set.
  * names and values must be arrays, each of length tuple_count, specifying the names and values respectively.
- */
-enum swift_error
-swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names, wchar_t **values)
+ * */
+static enum swift_error
+add_metadata_headers(struct swift_context *context, struct curl_slist **headers, size_t tuple_count, const wchar_t **names, const wchar_t **values)
 {
-	CURLcode curl_err;
-	enum swift_error sc_err;
-	struct curl_slist *curl_list = NULL;
 	char *header, *iconv_in, *iconv_out;
 	size_t iconv_in_len, iconv_out_len;
 
-	assert(context != NULL);
-	assert(names != NULL);
-	assert(values != NULL);
-
-	if (0 == tuple_count) {
-		return SCERR_SUCCESS;
-	}
 	header = NULL;
 	while (tuple_count--) {
 		header = context->reallocator(
@@ -467,7 +499,8 @@ swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names
 			+ 1 /* '\0' */
 		);
 		if (NULL == header) {
-			curl_slist_free_all(curl_list);
+			curl_slist_free_all(*headers);
+			context->deallocator(header);
 			return SCERR_ALLOC_FAILED;
 		}
 		strcpy(header, SWIFT_METADATA_PREFIX);
@@ -479,7 +512,7 @@ swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names
 		if ((size_t) -1 == iconv(context->pvt.iconv, &iconv_in, &iconv_in_len, &iconv_out, &iconv_out_len)) {
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
-			curl_slist_free_all(curl_list);
+			curl_slist_free_all(*headers);
 			context->deallocator(header);
 			return SCERR_INVARG;
 		}
@@ -491,20 +524,82 @@ swift_set_metadata(swift_context_t *context, size_t tuple_count, wchar_t **names
 		if ((size_t) -1 == iconv(context->pvt.iconv, &iconv_in, &iconv_in_len, &iconv_out, &iconv_out_len)) {
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
-			curl_slist_free_all(curl_list);
+			curl_slist_free_all(*headers);
 			context->deallocator(header);
 			return SCERR_INVARG;
 		}
-		curl_list = curl_slist_append(curl_list, header);
+		*headers = curl_slist_append(*headers, header);
 	}
 	context->deallocator(header);
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, curl_list);
+
+	return SCERR_SUCCESS;
+}
+
+/**
+ * Insert or update an object in Swift using the data supplied by the given callback function.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error
+swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+{
+	CURLcode curl_err;
+	struct curl_slist *headers;
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, supply_data_callback);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
 	}
-	sc_err = swift_request(context, POST);
-	curl_slist_free_all(curl_list);
 
-	return sc_err;
+	if (0 == metadata_count) {
+		headers = NULL;
+	} else {
+		enum swift_error sc_err;
+
+		curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, NULL);
+		if (CURLE_OK != curl_err) {
+			context->curl_error("curl_easy_setopt", curl_err);
+			return SCERR_URL_FAILED;
+		}
+		sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
+		if (SCERR_SUCCESS != sc_err) {
+			return sc_err;
+		}
+	}
+
+	return swift_request(context, PUT, headers);
+}
+
+/**
+ * Insert or update metadata for the current object.
+ * metadata_count specifies the number of {name, value} tuples to be set.
+ * metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error
+swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+{
+	CURLcode curl_err;
+	enum swift_error sc_err;
+	struct curl_slist *headers = NULL;
+
+	assert(context != NULL);
+	assert(metadata_names != NULL);
+	assert(metadata_values != NULL);
+
+	if (0 == metadata_count) {
+		return SCERR_SUCCESS; /* Nothing to do */
+	}
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, NULL);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
+	}
+	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
+	if (SCERR_SUCCESS != sc_err) {
+		return sc_err;
+	}
+
+	return swift_request(context, POST, headers);
 }
