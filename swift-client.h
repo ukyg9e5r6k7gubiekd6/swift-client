@@ -20,6 +20,13 @@ enum swift_error {
 	SCERR_URL_FAILED   = 4  /* network operation on a URL failed */
 };
 
+/* The subset of HTTP methods used by Swift */
+enum http_method {
+	GET,
+	PUT,
+	POST
+};
+
 /* A function which allocates memory */
 typedef void *(*swift_allocator_func_t)(size_t size);
 

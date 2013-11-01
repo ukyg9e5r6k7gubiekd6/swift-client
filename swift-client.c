@@ -215,10 +215,9 @@ make_url(swift_context_t *context)
 	return SCERR_SUCCESS;
 }
 
-enum swift_error
-swift_get(swift_context_t *context)
+static enum swift_error
+swift_request(swift_context_t *context, enum http_method method)
 {
-	/* TODO */
 	CURLcode curl_err;
 	enum swift_error sc_err;
 
@@ -228,7 +227,19 @@ swift_get(swift_context_t *context)
 		return sc_err;
 	}
 	curl_easy_setopt(context->pvt.curl, CURLOPT_URL, context->pvt.url);
-	/* TODO: curl_easy_setopt method */
+	switch (method) {
+	case GET:
+		break; /* this is libcurl's default */
+	case PUT:
+		curl_easy_setopt(context->pvt.curl, CURLOPT_PUT, 1L);
+		break;
+	case POST:
+		curl_easy_setopt(context->pvt.curl, CURLOPT_POST, 1L);
+		break;
+	default:
+		assert(0);
+		break;
+	}
 	curl_err = curl_easy_perform(context->pvt.curl);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_perform", curl_err);
@@ -238,11 +249,15 @@ swift_get(swift_context_t *context)
 }
 
 enum swift_error
+swift_get(swift_context_t *context)
+{
+	return swift_request(context, GET);
+}
+
+enum swift_error
 swift_put(swift_context_t *context)
 {
-	assert(context != NULL);
-	/* TODO */
-	return SCERR_SUCCESS;
+	return swift_request(context, PUT);
 }
 
 enum swift_error
