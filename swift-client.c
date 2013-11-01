@@ -12,7 +12,7 @@
 #define UTF8_SEQUENCE_MAXLEN 6
 
 /**
- * Default handler for curl errors.
+ * Default handler for libcurl errors.
  */
 static void
 default_curl_error_callback(const char *curl_funcname, CURLcode curl_err)
@@ -21,6 +21,9 @@ default_curl_error_callback(const char *curl_funcname, CURLcode curl_err)
 	fprintf(stderr, "%s failed: libcurl error code %ld: %s\n", curl_funcname, (long) curl_err, curl_easy_strerror(curl_err));
 }
 
+/**
+ * Default handler for libiconv errors.
+ */
 static void
 default_iconv_error_callback(const char *iconv_funcname, int iconv_errno)
 {
@@ -29,24 +32,37 @@ default_iconv_error_callback(const char *iconv_funcname, int iconv_errno)
 	perror(iconv_funcname);
 }
 
+/**
+ * Default memory allocator.
+ */
 static void *
 default_allocator(size_t size)
 {
 	return malloc(size);
 }
 
+/**
+ * Default memory re-allocator.
+ */
 static void *
 default_reallocator(void *ptr, size_t newsize)
 {
 	return realloc(ptr, newsize);
 }
 
+/**
+ * Default memory de-allocator.
+ */
 static void
 default_deallocator(void *ptr)
 {
 	free(ptr);
 }
 
+/**
+ * To be called at start of user program, while still single-threaded.
+ * Non-thread-safe and non-re-entrant.
+ */
 enum swift_error
 swift_global_init(void)
 {
@@ -60,12 +76,21 @@ swift_global_init(void)
 	return SCERR_SUCCESS;
 }
 
+/**
+ * To be called at end of user program, while again single-threaded.
+ * Non-thread-safe and non-re-entrant.
+ */
 void
 swift_global_cleanup(void)
 {
 	curl_global_cleanup();
 }
 
+/**
+ * To be called by each thread of user program that will use this library,
+ * before first other use of this library.
+ * Thread-safe and re-entrant.
+ */
 enum swift_error
 swift_start(swift_context_t *context)
 {
@@ -99,6 +124,12 @@ swift_start(swift_context_t *context)
 	return SCERR_SUCCESS;
 }
 
+/**
+ * To be called by each thread of user program that will use this library,
+ * after last other use of this library.
+ * To be called once per successful call to swift_start by that thread.
+ * Thread-safe and re-entrant.
+ */
 void
 swift_end(swift_context_t **context)
 {
@@ -128,6 +159,11 @@ swift_end(swift_context_t **context)
 	*context = NULL;
 }
 
+/**
+ * Given a wide string in in, convert it to UTF-8,
+ * then URL encode the UTF-8 bytes,
+ * then store the result in out.
+ */
 static enum swift_error
 utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
 {
@@ -170,18 +206,27 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
 	return SCERR_SUCCESS;
 }
 
+/**
+ * Set the name of the current Swift container.
+ */
 enum swift_error
 swift_set_container(swift_context_t *context, wchar_t *container_name)
 {
 	return utf8_and_url_encode(context, container_name, context->pvt.container);
 }
 
+/**
+ * Set the name of the current Swift object.
+ */
 enum swift_error
 swift_set_object(swift_context_t *context, wchar_t *object_name)
 {
 	return utf8_and_url_encode(context, object_name, context->pvt.object);
 }
 
+/**
+ * Generate a Swift URL from the current protocol, hostname, container and object.
+ */
 static enum swift_error
 make_url(swift_context_t *context)
 {
@@ -215,6 +260,10 @@ make_url(swift_context_t *context)
 	return SCERR_SUCCESS;
 }
 
+/**
+ * Execute a Swift request using the current protocol, hostname, container and object,
+ * and using the given HTTP method.
+ */
 static enum swift_error
 swift_request(swift_context_t *context, enum http_method method)
 {
@@ -248,18 +297,27 @@ swift_request(swift_context_t *context, enum http_method method)
 	return SCERR_SUCCESS;
 }
 
+/**
+ * Retrieve an object from Swift.
+ */
 enum swift_error
 swift_get(swift_context_t *context)
 {
 	return swift_request(context, GET);
 }
 
+/**
+ * Insert or update an object in Swift.
+ */
 enum swift_error
 swift_put(swift_context_t *context)
 {
 	return swift_request(context, PUT);
 }
 
+/**
+ * Insert or update metadata for an object.
+ */
 enum swift_error
 swift_post(swift_context_t *context, wchar_t *name, wchar_t *value)
 {

@@ -146,6 +146,16 @@ enum swift_error swift_start(swift_context_t *context);
 void swift_end(swift_context_t **context);
 
 /**
+ * Set the name of the current Swift container.
+ */
+enum swift_error swift_set_container(swift_context_t *context, wchar_t *container_name);
+
+/**
+ * Set the name of the current Swift object.
+ */
+enum swift_error swift_set_object(swift_context_t *context, wchar_t *object_name);
+
+/**
  * Retrieve an object from Swift.
  */
 enum swift_error swift_get(swift_context_t *context);
