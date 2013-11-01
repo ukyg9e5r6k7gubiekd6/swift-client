@@ -165,7 +165,7 @@ swift_end(swift_context_t **context)
  * then store the result in out.
  */
 static enum swift_error
-utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
+utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 {
 	char *url_encoded, *iconv_in, *iconv_out;
 	size_t in_len, utf8_in_len, iconv_in_len, iconv_out_len;
@@ -176,30 +176,30 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
 	/* Convert the wchar_t input to UTF-8 and write the result to out */
 	in_len = wcslen(in);
 	utf8_in_len = in_len * UTF8_SEQUENCE_MAXLEN; /* Assuming worst-case UTF-8 expansion */
-	context->reallocator(out, utf8_in_len);
-	if (NULL == out) {
+	*out = context->reallocator(*out, utf8_in_len);
+	if (NULL == *out) {
 		return SCERR_ALLOC_FAILED;
 	}
 	iconv_in_len = in_len * sizeof(wchar_t); /* iconv counts in bytes not chars */
 	iconv_out_len = utf8_in_len;
 	iconv_in = (char *) in;
-	iconv_out = out;
+	iconv_out = *out;
 	if ((size_t) -1 == iconv(context->pvt.iconv, &iconv_in, &iconv_in_len, &iconv_out, &iconv_out_len)) {
 		/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 		context->iconv_error("iconv", errno);
 		return SCERR_INVARG;
 	}
 	/* Create a URL-encoded copy of out in memory newly-allocated by libcurl */
-	url_encoded = curl_easy_escape(context->pvt.curl, out, in_len);
+	url_encoded = curl_easy_escape(context->pvt.curl, *out, in_len);
 	if (NULL == url_encoded) {
 		return SCERR_ALLOC_FAILED;
 	}
 	/* Copy the URL-encoded value into out, over-writing its previous UTF-8 value */
-	context->reallocator(out, strlen(url_encoded) + 1 /* '\0' */);
-	if (NULL == out) {
+	*out = context->reallocator(*out, strlen(url_encoded) + 1 /* '\0' */);
+	if (NULL == *out) {
 		return SCERR_ALLOC_FAILED;
 	}
-	strcpy(out, url_encoded);
+	strcpy(*out, url_encoded);
 	/* Free the URL-encoded copy created by libcurl */
 	curl_free(url_encoded);
 
@@ -210,13 +210,43 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char *out)
  * Set the current Swift server hostname.
  */
 enum swift_error
-swift_set_hostname(swift_context_t context, const char *hostname)
+swift_set_hostname(swift_context_t *context, const char *hostname)
 {
-	context->allocator(context->pvt.hostname, strlen(hostname) + 1 /* '\0' */);
+	context->pvt.hostname = context->reallocator(context->pvt.hostname, strlen(hostname) + 1 /* '\0' */);
 	if (NULL == context->pvt.hostname) {
 		return SCERR_ALLOC_FAILED;
 	}
 	strcpy(context->pvt.hostname, hostname);
+	return SCERR_SUCCESS;
+}
+
+/**
+ * Control whether the Swift server should be accessed via HTTPS, or just HTTP.
+ */
+enum swift_error
+swift_set_ssl(swift_context_t *context, unsigned int use_ssl)
+{
+	context->pvt.ssl = !!use_ssl;
+	return SCERR_SUCCESS;
+}
+
+/**
+ * Control whether an HTTPS server's certificate is required to chain to a trusted CA cert.
+ */
+enum swift_error
+swift_verify_cert_trusted(swift_context_t *context, unsigned int require_trusted_cert)
+{
+	context->pvt.verify_cert_trusted = !!require_trusted_cert;
+	return SCERR_SUCCESS;
+}
+
+/**
+ * Control whether an HTTPS server's hostname is required to match its certificate's hostname.
+ */
+enum swift_error
+swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matching_hostname)
+{
+	context->pvt.verify_cert_hostname = !!require_matching_hostname;
 	return SCERR_SUCCESS;
 }
 
@@ -226,7 +256,7 @@ swift_set_hostname(swift_context_t context, const char *hostname)
 enum swift_error
 swift_set_container(swift_context_t *context, wchar_t *container_name)
 {
-	return utf8_and_url_encode(context, container_name, context->pvt.container);
+	return utf8_and_url_encode(context, container_name, &context->pvt.container);
 }
 
 /**
@@ -235,7 +265,7 @@ swift_set_container(swift_context_t *context, wchar_t *container_name)
 enum swift_error
 swift_set_object(swift_context_t *context, wchar_t *object_name)
 {
-	return utf8_and_url_encode(context, object_name, context->pvt.object);
+	return utf8_and_url_encode(context, object_name, &context->pvt.object);
 }
 
 /**
@@ -251,7 +281,7 @@ make_url(swift_context_t *context)
 	context->pvt.url = context->reallocator(
 		context->pvt.url,
 		4 /* "http" */
-		+ (context->pvt.ssl ? 0 : 1) /* 's'? */
+		+ (context->pvt.ssl ? 1 : 0) /* 's'? */
 		+ 3 /* "://" */
 		+ strlen(context->pvt.hostname)
 		+ 1 /* '/' */
@@ -286,6 +316,8 @@ swift_request(swift_context_t *context, enum http_method method)
 
 	assert(context != NULL);
 	sc_err = make_url(context);
+	curl_easy_setopt(context->pvt.curl, CURLOPT_SSL_VERIFYPEER, (long) (context->pvt.ssl && context->pvt.verify_cert_trusted));
+	curl_easy_setopt(context->pvt.curl, CURLOPT_SSL_VERIFYHOST, (long) (context->pvt.ssl && context->pvt.verify_cert_hostname));
 	if (sc_err != SCERR_SUCCESS) {
 		return sc_err;
 	}

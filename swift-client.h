@@ -48,6 +48,8 @@ struct swift_context_private {
 	iconv_t iconv;    /* iconv library's conversion descriptor */
 	char *hostname;   /* hostname or dotted-decimal IP of Swift server */
 	unsigned int ssl; /* True if SSL in use, false otherwise */
+	unsigned int verify_cert_trusted;  /* True if the peer's certificate must chain to a trusted CA, false otherwise */
+	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
 	char *url;        /* The URL currently being used */
@@ -148,7 +150,22 @@ void swift_end(swift_context_t **context);
 /**
  * Set the current Swift server hostname.
  */
-enum swift_error swift_set_hostname(swift_context_t context, const char *hostname);
+enum swift_error swift_set_hostname(swift_context_t *context, const char *hostname);
+
+/**
+ * Control whether the Swift server should be accessed via HTTPS, or just HTTP.
+ */
+enum swift_error swift_set_ssl(swift_context_t *context, unsigned int use_ssl);
+
+/**
+ * Control whether an HTTPS server's certificate is required to chain to a trusted CA cert.
+ */
+enum swift_error swift_verify_cert_trusted(swift_context_t *context, unsigned int require_trusted_cert);
+
+/**
+ * Control whether an HTTPS server's hostname is required to match its certificate's hostname.
+ */
+enum swift_error swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matching_hostname);
 
 /**
  * Set the name of the current Swift container.
