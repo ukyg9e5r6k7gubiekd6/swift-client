@@ -42,6 +42,12 @@ typedef void (*curl_error_callback_t)(const char *curl_funcname, CURLcode res);
 /* A function which receives libiconv errors */
 typedef void (*iconv_error_callback_t)(const char *iconv_funcname, int iconv_errno);
 
+/* A function which supplies data from somewhere of its choice into memory upon demand */
+typedef size_t (*supply_data_func_t)(void *ptr, size_t size, size_t nmemb, void *stream);
+
+/* A function which receives data into somewhere of its choice from memory upon demand */
+typedef size_t (*receive_data_func_t)(char *ptr, size_t size, size_t nmemb, void *userdata);
+
 /* swift client library's per-thread private context */
 struct swift_context_private {
 	CURL *curl;       /* Handle to curl library's easy interface */
@@ -180,12 +186,12 @@ enum swift_error swift_set_object(swift_context_t *context, wchar_t *object_name
 /**
  * Retrieve an object from Swift.
  */
-enum swift_error swift_get(swift_context_t *context);
+enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive_data_callback);
 
 /**
  * Insert or update an object in Swift.
  */
-enum swift_error swift_put(swift_context_t *context);
+enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback);
 
 /**
  * Insert or update metadata for an object.

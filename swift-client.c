@@ -347,8 +347,9 @@ swift_request(swift_context_t *context, enum http_method method)
  * Retrieve an object from Swift.
  */
 enum swift_error
-swift_get(swift_context_t *context)
+swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
 {
+	curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, receive_data_callback);
 	return swift_request(context, GET);
 }
 
@@ -356,8 +357,9 @@ swift_get(swift_context_t *context)
  * Insert or update an object in Swift.
  */
 enum swift_error
-swift_put(swift_context_t *context)
+swift_put(swift_context_t *context, supply_data_func_t supply_data_callback)
 {
+	curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, supply_data_callback);
 	return swift_request(context, PUT);
 }
 
