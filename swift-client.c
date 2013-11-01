@@ -151,6 +151,10 @@ swift_end(swift_context_t **context)
 		(*context)->deallocator((*context)->pvt.hostname);
 		(*context)->pvt.hostname = NULL;
 	}
+	if ((*context)->pvt.account != NULL) {
+		(*context)->deallocator((*context)->pvt.account);
+		(*context)->pvt.account = NULL;
+	}
 	if ((*context)->pvt.container != NULL) {
 		(*context)->deallocator((*context)->pvt.container);
 		(*context)->pvt.container = NULL;
@@ -272,6 +276,15 @@ swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matchi
 }
 
 /**
+ * Set the name of the current Swift account.
+ */
+enum swift_error
+swift_set_account(swift_context_t *context, wchar_t *account_name)
+{
+	return utf8_and_url_encode(context, account_name, &context->pvt.account);
+}
+
+/**
  * Set the name of the current Swift container.
  */
 enum swift_error
@@ -290,7 +303,7 @@ swift_set_object(swift_context_t *context, wchar_t *object_name)
 }
 
 /**
- * Generate a Swift URL from the current protocol, hostname, container and object.
+ * Generate a Swift URL from the current protocol, hostname, API version, account, container and object.
  */
 static enum swift_error
 make_url(swift_context_t *context)
@@ -308,6 +321,8 @@ make_url(swift_context_t *context)
 		+ 2 /* "/v" */
 		+ (unsigned int) ceil(log10(context->pvt.api_ver))
 		+ 1 /* '/' */
+		+ strlen(context->pvt.account)
+		+ 1 /* '/' */
 		+ strlen(context->pvt.container)
 		+ 1 /* '/' */
 		+ strlen(context->pvt.object)
@@ -318,10 +333,11 @@ make_url(swift_context_t *context)
 	}
 	sprintf(
 		context->pvt.url,
-		"http%s://%s/v%u/%s/%s",
+		"http%s://%s/v%u/%s/%s/%s",
 		(context->pvt.ssl ? "s" : ""),
 		context->pvt.hostname,
 		context->pvt.api_ver,
+		context->pvt.account,
 		context->pvt.container,
 		context->pvt.object
 	);
@@ -330,7 +346,7 @@ make_url(swift_context_t *context)
 }
 
 /**
- * Execute a Swift request using the current protocol, hostname, container and object,
+ * Execute a Swift request using the current protocol, hostname, API version, account, container and object,
  * and using the given HTTP method.
  */
 static enum swift_error

@@ -57,6 +57,7 @@ struct swift_context_private {
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
 	char *hostname;   /* hostname or dotted-decimal IP of Swift server */
 	unsigned int api_ver; /* Swift API version */
+	char *account;    /* Name of current account */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
 	char *url;        /* The URL currently being used */
@@ -178,6 +179,11 @@ enum swift_error swift_verify_cert_trusted(swift_context_t *context, unsigned in
  * Control whether an HTTPS server's hostname is required to match its certificate's hostname.
  */
 enum swift_error swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matching_hostname);
+
+/**
+ * Set the name of the current Swift account.
+ */
+enum swift_error swift_set_account(swift_context_t *context, wchar_t *account_name);
 
 /**
  * Set the name of the current Swift container.
