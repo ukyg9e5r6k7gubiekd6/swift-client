@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <wchar.h>
+#include <iconv.h>
 #include <curl/curl.h>
 
 /**
@@ -13,11 +14,12 @@
  * using error callbacks specific to those libraries.
  */
 enum swift_error {
-	SCERR_SUCCESS      = 0, /* Success */
-	SCERR_INIT_FAILED  = 1, /* Initialisation of this library failed */
-	SCERR_INVARG       = 2, /* An invalid argument was supplied */
-	SCERR_ALLOC_FAILED = 3, /* memory allocation failed */
-	SCERR_URL_FAILED   = 4  /* network operation on a URL failed */
+	SCERR_SUCCESS       = 0, /* Success */
+	SCERR_INIT_FAILED   = 1, /* Initialisation of this library failed */
+	SCERR_INVARG        = 2, /* An invalid argument was supplied */
+	SCERR_ALLOC_FAILED  = 3, /* memory allocation failed */
+	SCERR_URL_FAILED    = 4, /* network operation on a URL failed */
+	SCERR_FILEIO_FAILED = 5  /* I/O operation on a file failed */
 };
 
 /* The subset of HTTP methods used by Swift */
@@ -103,7 +105,6 @@ struct swift_context {
 	 * If this is NULL at the time swift_start is called, a default de-allocator will be used.
 	 */
 	swift_deallocator_func_t deallocator;
-
 	/* This member (and its members, recursively) are 'private'. */
 	/* They should not be modified by your program unless you *really* know what you're doing. */
 	swift_context_private_t pvt;
@@ -154,7 +155,13 @@ enum swift_error swift_start(swift_context_t *context);
  * to swift_start by that thread.
  * After this call, the context is invalid.
  */
-void swift_end(swift_context_t **context);
+void swift_end(swift_context_t *context);
+
+/**
+ * Control verbose logging to stderr of the actions of this library and the libraries it uses.
+ * Currently this enables logging to standard error of libcurl's actions.
+ */
+enum swift_error swift_set_debug(swift_context_t *context, unsigned int enable_debugging);
 
 /**
  * Set the current Swift server hostname.

@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <string.h>
-#include <iconv.h>
 #include <errno.h>
 #include <math.h>
 
@@ -122,7 +121,7 @@ swift_start(swift_context_t *context)
 	if (!context->pvt.api_ver) {
 		context->pvt.api_ver = DEFAULT_SWIFT_API_VER;
 	}
-	context->pvt.iconv = iconv_open("WCHAR_T", "UTF-8");
+	context->pvt.iconv = iconv_open("UTF-8", "WCHAR_T");
 	if ((iconv_t) -1 == context->pvt.iconv) {
 		context->iconv_error("iconv_open", errno);
 		return SCERR_INIT_FAILED;
@@ -144,40 +143,56 @@ swift_start(swift_context_t *context)
  * Thread-safe and re-entrant.
  */
 void
-swift_end(swift_context_t **context)
+swift_end(swift_context_t *context)
 {
 	assert(context != NULL);
-	assert(*context != NULL);
-	curl_easy_cleanup((*context)->pvt.curl);
-	(*context)->pvt.curl = NULL;
-	if ((*context)->pvt.url != NULL) {
-		(*context)->deallocator((*context)->pvt.url);
-		(*context)->pvt.url = NULL;
+	curl_easy_cleanup(context->pvt.curl);
+	context->pvt.curl = NULL;
+	if (context->pvt.url != NULL) {
+		context->deallocator(context->pvt.url);
+		context->pvt.url = NULL;
 	}
-	if ((*context)->pvt.hostname != NULL) {
-		(*context)->deallocator((*context)->pvt.hostname);
-		(*context)->pvt.hostname = NULL;
+	if (context->pvt.hostname != NULL) {
+		context->deallocator(context->pvt.hostname);
+		context->pvt.hostname = NULL;
 	}
-	if ((*context)->pvt.account != NULL) {
-		(*context)->deallocator((*context)->pvt.account);
-		(*context)->pvt.account = NULL;
+	if (context->pvt.account != NULL) {
+		context->deallocator(context->pvt.account);
+		context->pvt.account = NULL;
 	}
-	if ((*context)->pvt.container != NULL) {
-		(*context)->deallocator((*context)->pvt.container);
-		(*context)->pvt.container = NULL;
+	if (context->pvt.container != NULL) {
+		context->deallocator(context->pvt.container);
+		context->pvt.container = NULL;
 	}
-	if ((*context)->pvt.object != NULL) {
-		(*context)->deallocator((*context)->pvt.object);
-		(*context)->pvt.object = NULL;
+	if (context->pvt.object != NULL) {
+		context->deallocator(context->pvt.object);
+		context->pvt.object = NULL;
 	}
-	if ((*context)->pvt.auth_token != NULL) {
-		(*context)->deallocator((*context)->pvt.auth_token);
-		(*context)->pvt.auth_token = NULL;
+	if (context->pvt.auth_token != NULL) {
+		context->deallocator(context->pvt.auth_token);
+		context->pvt.auth_token = NULL;
 	}
-	if (iconv_close((*context)->pvt.iconv) < 0) {
-		(*context)->iconv_error("iconv_close", errno);
+	if (iconv_close(context->pvt.iconv) < 0) {
+		context->iconv_error("iconv_close", errno);
 	}
-	*context = NULL;
+}
+
+/**
+ * Control verbose logging to stderr of the actions of this library and the libraries it uses.
+ * Currently this enables logging to standard error of libcurl's actions.
+ */
+enum swift_error
+swift_set_debug(swift_context_t *context, unsigned int enable_debugging)
+{
+	CURLcode curl_err;
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_VERBOSE, enable_debugging ? 1 : 0);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_INVARG;
+	}
+
+	return SCERR_SUCCESS;
 }
 
 /**
@@ -468,6 +483,9 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
 {
 	CURLcode curl_err;
 
+	assert(context);
+	assert(context->pvt.auth_token);
+
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, receive_data_callback);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
@@ -546,6 +564,9 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, siz
 {
 	CURLcode curl_err;
 	struct curl_slist *headers;
+
+	assert(context);
+	assert(context->pvt.auth_token);
 
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, supply_data_callback);
 	if (CURLE_OK != curl_err) {
