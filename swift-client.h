@@ -164,6 +164,12 @@ void swift_end(swift_context_t *context);
 enum swift_error swift_set_debug(swift_context_t *context, unsigned int enable_debugging);
 
 /**
+ * Control whether a proxy (eg HTTP or SOCKS) is used to access the Swift server.
+ * Argument must be a URL, or NULL if no proxy is to be used.
+ */
+enum swift_error swift_set_proxy(swift_context_t *context, const char *proxy_url);
+
+/**
  * Set the current Swift server hostname.
  */
 enum swift_error swift_set_hostname(swift_context_t *context, const char *hostname);

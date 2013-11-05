@@ -178,6 +178,24 @@ swift_end(swift_context_t *context)
 }
 
 /**
+ * Control whether a proxy (eg HTTP or SOCKS) is used to access the Swift server.
+ * Argument must be a URL, or NULL if no proxy is to be used.
+ */
+enum swift_error
+swift_set_proxy(swift_context_t *context, const char *proxy_url)
+{
+	CURLcode curl_err;
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_PROXY, (NULL == proxy_url) ? "" : proxy_url);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_INVARG;
+	}
+
+	return SCERR_SUCCESS;
+}
+
+/**
  * Control verbose logging to stderr of the actions of this library and the libraries it uses.
  * Currently this enables logging to standard error of libcurl's actions.
  */
