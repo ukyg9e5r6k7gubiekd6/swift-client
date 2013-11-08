@@ -38,11 +38,16 @@ enum swift_error {
 	SCERR_AUTH_FAILED   = 6  /* Authentication failure */
 };
 
-/* The subset of HTTP methods used by Swift */
-enum http_method {
-	GET,
-	PUT,
-	POST
+/* Operations supported by Swift */
+enum swift_operation {
+	CREATE_CONTAINER,
+	LIST_CONTAINER,
+	SET_CONTAINER_METADATA,
+	DELETE_CONTAINER,
+	PUT_OBJECT,
+	GET_OBJECT,
+	SET_OBJECT_METADATA,
+	DELETE_OBJECT
 };
 
 /* A function which allocates memory */
@@ -80,7 +85,6 @@ struct swift_context_private {
 	unsigned int verify_cert_trusted;  /* True if the peer's certificate must chain to a trusted CA, false otherwise */
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
 	unsigned int api_ver; /* Swift API version */
-	char *account;    /* Name of current account */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
 	char *auth_payload; /* Authentication POST payload, containing credentials */
@@ -236,11 +240,6 @@ enum swift_error swift_verify_cert_trusted(swift_context_t *context, unsigned in
 enum swift_error swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matching_hostname);
 
 /**
- * Set the name of the current Swift account.
- */
-enum swift_error swift_set_account(swift_context_t *context, wchar_t *account_name);
-
-/**
  * Set the value of the authentication token to be supplied with requests.
  * This should have have been obtained previously from a separate authentication service.
  */
@@ -260,6 +259,11 @@ enum swift_error swift_set_object(swift_context_t *context, wchar_t *object_name
  * Retrieve an object from Swift and pass its data to the given callback function.
  */
 enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive_data_callback);
+
+/**
+ * Create a Swift container with the current container name.
+ */
+enum swift_error swift_create_container(swift_context_t *context);
 
 /**
  * Insert or update an object in Swift using the data supplied by the given callback function.

@@ -210,10 +210,6 @@ swift_end(swift_context_t *context)
 		context->deallocator(context->pvt.base_url);
 		context->pvt.base_url = NULL;
 	}
-	if (context->pvt.account != NULL) {
-		context->deallocator(context->pvt.account);
-		context->pvt.account = NULL;
-	}
 	if (context->pvt.container != NULL) {
 		context->deallocator(context->pvt.container);
 		context->pvt.container = NULL;
@@ -383,15 +379,6 @@ swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matchi
 }
 
 /**
- * Set the name of the current Swift account.
- */
-enum swift_error
-swift_set_account(swift_context_t *context, wchar_t *account_name)
-{
-	return utf8_and_url_encode(context, account_name, &context->pvt.account);
-}
-
-/**
  * Set the value of the authentication token to be supplied with requests.
  * This should have been obtained previously from a separate authentication service.
  */
@@ -429,36 +416,76 @@ swift_set_object(swift_context_t *context, wchar_t *object_name)
  * Generate a Swift URL from the current base URL, account, container and object.
  */
 static enum swift_error
-make_url(swift_context_t *context)
+make_url(swift_context_t *context, enum swift_operation operation)
 {
+	size_t url_len = context->pvt.base_url_len;
+
 	assert(context != NULL);
 	assert(context->pvt.api_ver != 0);
-	assert(context->pvt.account != NULL);
 	assert(context->pvt.container != NULL);
-	assert(context->pvt.object != NULL);
 	assert(context->pvt.base_url);
 	assert(context->pvt.base_url_len);
+
+	switch (operation) {
+	case PUT_OBJECT:
+	case GET_OBJECT:
+	case SET_OBJECT_METADATA:
+	case DELETE_OBJECT:
+		assert(context->pvt.object != NULL);
+		url_len +=
+			1 /* '/' */
+			+ strlen(context->pvt.object)
+		;
+		/* no break: fall thru */
+	case CREATE_CONTAINER:
+	case LIST_CONTAINER:
+	case SET_CONTAINER_METADATA:
+	case DELETE_CONTAINER:
+		url_len +=
+			1 /* '/' */
+			+ strlen(context->pvt.container)
+		;
+		break;
+	default:
+		assert(0);
+		return SCERR_INVARG;
+	}
+	url_len++; /* '\0' */
+
 	context->pvt.base_url = context->reallocator(
 		context->pvt.base_url,
-		context->pvt.base_url_len
-		+ 1 /* '/' */
-		+ strlen(context->pvt.account)
-		+ 1 /* '/' */
-		+ strlen(context->pvt.container)
-		+ 1 /* '/' */
-		+ strlen(context->pvt.object)
-		+ 1 /* '\0' */
+		url_len
 	);
 	if (NULL == context->pvt.base_url) {
 		return SCERR_ALLOC_FAILED;
 	}
-	sprintf(
-		context->pvt.base_url + context->pvt.base_url_len,
-		"/%s/%s/%s",
-		context->pvt.account,
-		context->pvt.container,
-		context->pvt.object
-	);
+
+	switch (operation) {
+	case CREATE_CONTAINER:
+	case LIST_CONTAINER:
+	case SET_CONTAINER_METADATA:
+	case DELETE_CONTAINER:
+		sprintf(
+			context->pvt.base_url + context->pvt.base_url_len,
+			"/%s",
+			context->pvt.container
+		);
+		break;
+	case PUT_OBJECT:
+	case GET_OBJECT:
+	case SET_OBJECT_METADATA:
+	case DELETE_OBJECT:
+		sprintf(
+			context->pvt.base_url + context->pvt.base_url_len,
+			"/%s/%s",
+			context->pvt.container,
+			context->pvt.object
+		);
+		break;
+	default:
+		assert(0);
+		return SCERR_INVARG;
+	}
 
 	return SCERR_SUCCESS;
 }
@@ -767,13 +794,13 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
  * This function consumes headers.
  */
 static enum swift_error
-swift_request(swift_context_t *context, enum http_method method, struct curl_slist *headers)
+swift_request(swift_context_t *context, enum swift_operation operation, struct curl_slist *headers)
 {
 	CURLcode curl_err;
 	enum swift_error sc_err;
 
 	assert(context != NULL);
-	sc_err = make_url(context);
+	sc_err = make_url(context, operation);
 	if (sc_err != SCERR_SUCCESS) {
 		return sc_err;
 	}
@@ -785,23 +812,38 @@ swift_request(swift_context_t *context, enum http_method method, struct curl_sli
 	}
 	/* Set HTTP request method */
 	{
-		CURLoption curl_method;
+		CURLoption curl_opt;
+		union {
+			long longval;
+			const char *stringval;
+		} curl_param;
 
-		switch (method) {
-		case GET:
-			curl_method = CURLOPT_HTTPGET;
+		switch (operation) {
+		case LIST_CONTAINER:
+		case GET_OBJECT:
+			curl_opt = CURLOPT_HTTPGET;
+			curl_param.longval = 1L;
 			break;
-		case PUT:
-			curl_method = CURLOPT_UPLOAD;
+		case CREATE_CONTAINER:
+		case PUT_OBJECT:
+			curl_opt = CURLOPT_UPLOAD;
+			curl_param.longval = 1L;
 			break;
-		case POST:
-			curl_method = CURLOPT_POST;
+		case SET_CONTAINER_METADATA:
+		case SET_OBJECT_METADATA:
+			curl_opt = CURLOPT_POST;
+			curl_param.longval = 1L;
+			break;
+		case DELETE_CONTAINER:
+		case DELETE_OBJECT:
+			curl_opt = CURLOPT_CUSTOMREQUEST;
+			curl_param.stringval = "DELETE";
 			break;
 		default:
 			assert(0);
-			break;
+			return SCERR_INVARG;
 		}
-		curl_err = curl_easy_setopt(context->pvt.curl, curl_method, 1L);
+		curl_err = curl_easy_setopt(context->pvt.curl, curl_opt, curl_param);
 		if (CURLE_OK != curl_err) {
 			context->curl_error("curl_easy_setopt", curl_err);
 			return SCERR_URL_FAILED;
@@ -857,7 +899,7 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
 		return SCERR_URL_FAILED;
 	}
 
-	return swift_request(context, GET, NULL);
+	return swift_request(context, GET_OBJECT, NULL);
 }
 
 /**
@@ -919,6 +961,18 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 }
 
 /**
+ * Create a Swift container with the current container name.
+ */
+enum swift_error
+swift_create_container(swift_context_t *context)
+{
+	assert(context);
+	assert(context->pvt.auth_token);
+
+	return swift_request(context, CREATE_CONTAINER, NULL);
+}
+
+/**
  * Insert or update an object in Swift using the data supplied by the given callback function.
  * Optionally, also attach a set of metadata {name, value} tuples to the object.
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
@@ -955,7 +1009,7 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, siz
 		}
 	}
 
-	return swift_request(context, PUT, headers);
+	return swift_request(context, PUT_OBJECT, headers);
 }
 
 /**
@@ -987,5 +1041,5 @@ swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_
 		return sc_err;
 	}
 
-	return swift_request(context, POST, headers);
+	return swift_request(context, SET_OBJECT_METADATA, headers);
 }
