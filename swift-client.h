@@ -7,6 +7,21 @@
 #include <wchar.h>
 #include <iconv.h>
 #include <curl/curl.h>
+#include <json/json.h>
+
+/**
+ * High-level types of errors which can occur while attempting to use Keystone.
+ * More detail is available from lower-level libraries (such as curl and libjson)
+ * using error callbacks specific to those libraries.
+ */
+enum keystone_error {
+	KSERR_SUCCESS     = 0, /* Success */
+	KSERR_INIT_FAILED = 1, /* Initialisation of this library failed */
+	KSERR_URL_FAILED  = 2, /* Network operation on a URL failed */
+	KSERR_REJECTED    = 3, /* Authentication attempt rejected */
+	KSERR_NOTFOUND    = 4, /* Requested service(s) not found in service catalog */
+	KSERR_PARSE       = 5  /* Failed to parse Keystone response */
+};
 
 /**
  * High-level types of errors which can occur while attempting to use Swift.
@@ -17,9 +32,10 @@ enum swift_error {
 	SCERR_SUCCESS       = 0, /* Success */
 	SCERR_INIT_FAILED   = 1, /* Initialisation of this library failed */
 	SCERR_INVARG        = 2, /* An invalid argument was supplied */
-	SCERR_ALLOC_FAILED  = 3, /* memory allocation failed */
-	SCERR_URL_FAILED    = 4, /* network operation on a URL failed */
-	SCERR_FILEIO_FAILED = 5  /* I/O operation on a file failed */
+	SCERR_ALLOC_FAILED  = 3, /* Memory allocation failed */
+	SCERR_URL_FAILED    = 4, /* Network operation on a URL failed */
+	SCERR_FILEIO_FAILED = 5, /* I/O operation on a file failed */
+	SCERR_AUTH_FAILED   = 6  /* Authentication failure */
 };
 
 /* The subset of HTTP methods used by Swift */
@@ -44,6 +60,12 @@ typedef void (*curl_error_callback_t)(const char *curl_funcname, CURLcode res);
 /* A function which receives libiconv errors */
 typedef void (*iconv_error_callback_t)(const char *iconv_funcname, int iconv_errno);
 
+/* A function which receives libjson errors */
+typedef void (*json_error_callback_t)(const char *json_funcname, enum json_tokener_error json_err);
+
+/* A function which receives Keystone errors */
+typedef void (*keystone_error_callback_t)(const char *keystone_operation, enum keystone_error keystone_err);
+
 /* A function which supplies data from somewhere of its choice into memory upon demand */
 typedef size_t (*supply_data_func_t)(void *ptr, size_t size, size_t nmemb, void *stream);
 
@@ -54,16 +76,17 @@ typedef size_t (*receive_data_func_t)(char *ptr, size_t size, size_t nmemb, void
 struct swift_context_private {
 	CURL *curl;       /* Handle to curl library's easy interface */
 	iconv_t iconv;    /* iconv library's conversion descriptor */
-	unsigned int ssl; /* True if SSL in use, false otherwise */
+	struct json_tokener *json_tokeniser; /* libjson0 library's JSON tokeniser */
 	unsigned int verify_cert_trusted;  /* True if the peer's certificate must chain to a trusted CA, false otherwise */
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
-	char *hostname;   /* hostname or dotted-decimal IP of Swift server */
 	unsigned int api_ver; /* Swift API version */
 	char *account;    /* Name of current account */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
+	char *auth_payload; /* Authentication POST payload, containing credentials */
 	char *auth_token; /* Authentication token previously obtained from separate authentication service */
-	char *url;        /* The URL currently being used */
+	unsigned int base_url_len; /* Length of base Swift URL, with API version but without account, container or object */
+	char *base_url;   /* Swift base URL, with API version but without account, container or object */
 };
 
 typedef struct swift_context_private swift_context_private_t;
@@ -90,6 +113,18 @@ struct swift_context {
 	 * If this is NULL at the time swift_start is called, a default handler will be used.
 	 */
 	iconv_error_callback_t iconv_error;
+	/**
+	 * Called when a libjson error occurs.
+	 * Your program may set this function in order to perform custom error handling.
+	 * If this is NULL at the time swift_start is called, a default handler will be used.
+	 */
+	json_error_callback_t json_error;
+	/**
+	 * Called when a Keystone error occurs.
+	 * Your program may set this function in order to perform custom error handling.
+	 * If this is NULL at the time swift_start is called, a default handler will be used.
+	 */
+	keystone_error_callback_t keystone_error;
 	/**
 	 * Called when this library needs to allocate memory of the given size in bytes.
 	 * If this is NULL at the time swift_start is called, a default allocator will be used.
@@ -170,9 +205,15 @@ enum swift_error swift_set_debug(swift_context_t *context, unsigned int enable_d
 enum swift_error swift_set_proxy(swift_context_t *context, const char *proxy_url);
 
 /**
- * Set the current Swift server hostname.
+ * Authenticate against a Keystone authentication server with the given tenant and user names and password.
+ * This yields an authorisation token, which is then used to access all Swift services.
  */
-enum swift_error swift_set_hostname(swift_context_t *context, const char *hostname);
+enum swift_error keystone_authenticate(swift_context_t *context, const char *url, const char *tenant_name, const char *username, const char *password);
+
+/**
+ * Set the current Swift server URL. This must not contain any path information.
+ */
+enum swift_error swift_set_url(swift_context_t *context, const char *url);
 
 /**
  * Set the current Swift API version to be spoken with the server.
