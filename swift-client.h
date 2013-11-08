@@ -266,12 +266,34 @@ enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive
 enum swift_error swift_create_container(swift_context_t *context);
 
 /**
+ * Delete the Swift container with the current container name.
+ */
+enum swift_error swift_delete_container(swift_context_t *context);
+
+/**
  * Insert or update an object in Swift using the data supplied by the given callback function.
+ * The given callback_arg will be passed as the last argument to the callback function.
  * Optionally, also attach a set of metadata {name, value} tuples to the object.
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, const void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+
+/**
+ * Insert or update an object in Swift using the data in the given-names file.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error swift_put_file(swift_context_t *context, const char *filename, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+
+/**
+ * Insert or update an object in Swift using the size bytes of data located in memory at ptr.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error swift_put_data_memory(swift_context_t *context, const unsigned char *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Insert or update metadata for the current object.
@@ -279,5 +301,10 @@ enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_d
  * metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
 enum swift_error swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+
+/**
+ * Delete the Swift object with the current container and object names.
+ */
+enum swift_error swift_delete_object(swift_context_t *context);
 
 #endif /* SWIFT_CLIENT_H_ */

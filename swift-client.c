@@ -787,6 +787,12 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 	return SCERR_SUCCESS;
 }
 
+static size_t
+ignore_response(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+	return size * nmemb;
+}
+
 /**
  * Execute a Swift request using the current protocol, hostname, API version, account, container and object,
  * and using the given HTTP method.
@@ -803,6 +809,12 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 	sc_err = make_url(context, operation);
 	if (sc_err != SCERR_SUCCESS) {
 		return sc_err;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, ignore_response);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
 	}
 
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_URL, context->pvt.base_url);
@@ -973,13 +985,25 @@ swift_create_container(swift_context_t *context)
 }
 
 /**
+ * Delete the Swift container with the current container name.
+ */
+enum swift_error
+swift_delete_container(swift_context_t *context)
+{
+	assert(context);
+	assert(context->pvt.auth_token);
+
+	return swift_request(context, DELETE_CONTAINER, NULL);
+}
+
+/**
  * Insert or update an object in Swift using the data supplied by the given callback function.
  * Optionally, also attach a set of metadata {name, value} tuples to the object.
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
 enum swift_error
-swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, const void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
 	CURLcode curl_err;
 	struct curl_slist *headers;
@@ -991,6 +1015,11 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, siz
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READDATA, callback_arg);
+	if (CURLE_OK != curl_err) {
+		return SCERR_FILEIO_FAILED;
 	}
 
 	if (0 == metadata_count) {
@@ -1012,6 +1041,72 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, siz
 	return swift_request(context, PUT_OBJECT, headers);
 }
 
+static size_t
+supply_data_from_file(void *ptr, size_t size, size_t nmemb, void *stream)
+{
+	return fread(ptr, size, nmemb, stream);
+}
+
+/**
+ * Insert or update an object in Swift using the data in the given-names file.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error
+swift_put_file(swift_context_t *context, const char *filename, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+{
+	FILE *stream;
+	enum swift_error swift_err;
+
+	stream = fopen(filename, "rb");
+	if (NULL == stream) {
+		perror("fopen");
+		return SCERR_FILEIO_FAILED;
+	}
+
+	swift_err = swift_put(context, supply_data_from_file, stream, metadata_count, metadata_names, metadata_values);
+
+	if (fclose(stream) != 0) {
+		swift_err = SCERR_FILEIO_FAILED;
+	}
+
+	return swift_err;
+}
+
+struct data_from_mem_args {
+	const unsigned char *ptr;
+	size_t nleft;
+};
+
+static size_t
+supply_data_from_memory(void *ptr, size_t size, size_t nmemb, void *cookie)
+{
+	struct data_from_mem_args *args = (struct data_from_mem_args *) cookie;
+	size_t len = min(size * nmemb, args->nleft);
+	memcpy(ptr, args->ptr, len);
+	args->ptr += len;
+	args->nleft -= len;
+	return len;
+}
+
+/**
+ * Insert or update an object in Swift using the size bytes of data located in memory at ptr.
+ * Optionally, also attach a set of metadata {name, value} tuples to the object.
+ * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
+ * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
+ */
+enum swift_error
+swift_put_data_memory(swift_context_t *context, const unsigned char *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+{
+	struct data_from_mem_args args;
+
+	args.ptr = ptr;
+	args.nleft = size;
+
+	return swift_put(context, supply_data_from_memory, &args, metadata_count, metadata_names, metadata_values);
+}
+
 /**
  * Insert or update metadata for the current object.
  * metadata_count specifies the number of {name, value} tuples to be set.
@@ -1031,15 +1126,29 @@ swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_
 	if (0 == metadata_count) {
 		return SCERR_SUCCESS; /* Nothing to do */
 	}
+
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, NULL);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
 	}
+
 	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
 	if (SCERR_SUCCESS != sc_err) {
 		return sc_err;
 	}
 
 	return swift_request(context, SET_OBJECT_METADATA, headers);
+}
+
+/**
+ * Delete the Swift object with the current container and object names.
+ */
+enum swift_error
+swift_delete_object(swift_context_t *context)
+{
+	assert(context);
+	assert(context->pvt.auth_token);
+
+	return swift_request(context, DELETE_OBJECT, NULL);
 }
