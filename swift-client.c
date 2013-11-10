@@ -92,30 +92,21 @@ void default_keystone_error_callback(const char *keystone_operation, enum keysto
 }
 
 /**
- * Default memory allocator.
+ * Default memory [re-/de-]allocator.
  */
 static void *
-default_allocator(size_t size)
+default_allocator(void *ptr, size_t size)
 {
-	return malloc(size);
-}
-
-/**
- * Default memory re-allocator.
- */
-static void *
-default_reallocator(void *ptr, size_t newsize)
-{
-	return realloc(ptr, newsize);
-}
-
-/**
- * Default memory de-allocator.
- */
-static void
-default_deallocator(void *ptr)
-{
-	free(ptr);
+	if (0 == size) {
+		if (ptr != NULL) {
+			free(ptr);
+		}
+		return NULL;
+	}
+	if (NULL == ptr) {
+		return malloc(size);
+	}
+	return realloc(ptr, size);
 }
 
 /**
@@ -170,12 +161,6 @@ swift_start(swift_context_t *context)
 	if (!context->allocator) {
 		context->allocator = default_allocator;
 	}
-	if (!context->reallocator) {
-		context->reallocator = default_reallocator;
-	}
-	if (!context->deallocator) {
-		context->deallocator = default_deallocator;
-	}
 	if (!context->pvt.api_ver) {
 		context->pvt.api_ver = DEFAULT_SWIFT_API_VER;
 	}
@@ -207,24 +192,19 @@ swift_end(swift_context_t *context)
 	curl_easy_cleanup(context->pvt.curl);
 	context->pvt.curl = NULL;
 	if (context->pvt.base_url != NULL) {
-		context->deallocator(context->pvt.base_url);
-		context->pvt.base_url = NULL;
+		context->pvt.base_url = context->allocator(context->pvt.base_url, 0);
 	}
 	if (context->pvt.container != NULL) {
-		context->deallocator(context->pvt.container);
-		context->pvt.container = NULL;
+		context->pvt.container = context->allocator(context->pvt.container, 0);
 	}
 	if (context->pvt.object != NULL) {
-		context->deallocator(context->pvt.object);
-		context->pvt.object = NULL;
+		context->pvt.object = context->allocator(context->pvt.object, 0);
 	}
 	if (context->pvt.auth_token != NULL) {
-		context->deallocator(context->pvt.auth_token);
-		context->pvt.auth_token = NULL;
+		context->pvt.auth_token = context->allocator(context->pvt.auth_token, 0);
 	}
 	if (context->pvt.auth_payload != NULL) {
-		context->deallocator(context->pvt.auth_payload);
-		context->pvt.auth_payload = NULL;
+		context->pvt.auth_payload = context->allocator(context->pvt.auth_payload, 0);
 	}
 	if (iconv_close(context->pvt.iconv) < 0) {
 		context->iconv_error("iconv_close", errno);
@@ -288,7 +268,7 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 	/* Convert the wchar_t input to UTF-8 and write the result to out */
 	in_len = wcslen(in);
 	utf8_in_len = in_len * UTF8_SEQUENCE_MAXLEN; /* Assuming worst-case UTF-8 expansion */
-	*out = context->reallocator(*out, utf8_in_len);
+	*out = context->allocator(*out, utf8_in_len);
 	if (NULL == *out) {
 		return SCERR_ALLOC_FAILED;
 	}
@@ -307,7 +287,7 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 		return SCERR_ALLOC_FAILED;
 	}
 	/* Copy the URL-encoded value into out, over-writing its previous UTF-8 value */
-	*out = context->reallocator(*out, strlen(url_encoded) + 1 /* '\0' */);
+	*out = context->allocator(*out, strlen(url_encoded) + 1 /* '\0' */);
 	if (NULL == *out) {
 		return SCERR_ALLOC_FAILED;
 	}
@@ -324,7 +304,7 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 enum swift_error
 swift_set_url(swift_context_t *context, const char *url)
 {
-	context->pvt.base_url = context->reallocator(context->pvt.base_url, strlen(url) + 1 /* '\0' */);
+	context->pvt.base_url = context->allocator(context->pvt.base_url, strlen(url) + 1 /* '\0' */);
 	if (NULL == context->pvt.base_url) {
 		return SCERR_ALLOC_FAILED;
 	}
@@ -385,7 +365,7 @@ swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matchi
 enum swift_error
 swift_set_auth_token(swift_context_t *context, char *auth_token)
 {
-	context->pvt.auth_token = context->reallocator(context->pvt.auth_token, strlen(auth_token) + 1 /* '\0' */);
+	context->pvt.auth_token = context->allocator(context->pvt.auth_token, strlen(auth_token) + 1 /* '\0' */);
 	if (NULL == context->pvt.auth_token) {
 		return SCERR_ALLOC_FAILED;
 	}
@@ -452,10 +432,7 @@ make_url(swift_context_t *context, enum swift_operation operation)
 	}
 	url_len++; /* '\0' */
 
-	context->pvt.base_url = context->reallocator(
-		context->pvt.base_url,
-		url_len
-	);
+	context->pvt.base_url = context->allocator(context->pvt.base_url, url_len);
 	if (NULL == context->pvt.base_url) {
 		return SCERR_ALLOC_FAILED;
 	}
@@ -538,7 +515,7 @@ process_keystone_response(void *ptr, size_t size, size_t nmemb, void *userdata)
 			context->keystone_error("response.access.token.id not a string", KSERR_PARSE);
 			return 0; /* Not the expected JSON strong. Inform libcurl no data 'handled'. */
 		}
-		context->pvt.auth_token = context->reallocator(
+		context->pvt.auth_token = context->allocator(
 			context->pvt.auth_token,
 			json_object_get_string_len(subobj)
 			+ 1 /* '\0' */
@@ -642,7 +619,7 @@ process_keystone_response(void *ptr, size_t size, size_t nmemb, void *userdata)
 					return 0; /* Not the expected JSON string. Inform libcurl no data 'handled'. */
 				}
 				context->pvt.base_url_len = json_object_get_string_len(endpoint_public_url);
-				context->pvt.base_url = context->reallocator(
+				context->pvt.base_url = context->allocator(
 					context->pvt.base_url,
 					context->pvt.base_url_len
 					+ 1 /* '\0' */
@@ -707,7 +684,7 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 	headers = curl_slist_append(headers, "Expect:");
 
 	/* Generate POST request body containing the authentication credentials */
-	context->pvt.auth_payload = context->reallocator(
+	context->pvt.auth_payload = context->allocator(
 		context->pvt.auth_payload,
 		strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_USERNAME)
 		+ strlen(username)
@@ -865,7 +842,7 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 	{
 		char *header = NULL;
 
-		header = context->reallocator(
+		header = context->allocator(
 			header,
 			strlen(SWIFT_AUTH_HEADER_NAME)
 			+ 2 /* ": " */
@@ -877,7 +854,7 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 		}
 		sprintf(header, SWIFT_AUTH_HEADER_NAME ": %s", context->pvt.auth_token);
 		headers = curl_slist_append(headers, header);
-		context->deallocator(header);
+		context->allocator(header, 0);
 	}
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, headers);
 	if (CURLE_OK != curl_err) {
@@ -927,7 +904,7 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 
 	header = NULL;
 	while (tuple_count--) {
-		header = context->reallocator(
+		header = context->allocator(
 			header,
 			strlen(SWIFT_METADATA_PREFIX)
 			+ wcslen(names[tuple_count]) * UTF8_SEQUENCE_MAXLEN /* Assume worst-case expansion */
@@ -937,7 +914,7 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 		);
 		if (NULL == header) {
 			curl_slist_free_all(*headers);
-			context->deallocator(header);
+			context->allocator(header, 0);
 			return SCERR_ALLOC_FAILED;
 		}
 		strcpy(header, SWIFT_METADATA_PREFIX);
@@ -950,7 +927,7 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
 			curl_slist_free_all(*headers);
-			context->deallocator(header);
+			context->allocator(header, 0);
 			return SCERR_INVARG;
 		}
 		strcat(header, ": ");
@@ -962,12 +939,12 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
 			curl_slist_free_all(*headers);
-			context->deallocator(header);
+			context->allocator(header, 0);
 			return SCERR_INVARG;
 		}
 		*headers = curl_slist_append(*headers, header);
 	}
-	context->deallocator(header);
+	context->allocator(header, 0);
 
 	return SCERR_SUCCESS;
 }

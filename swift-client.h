@@ -50,14 +50,8 @@ enum swift_operation {
 	DELETE_OBJECT
 };
 
-/* A function which allocates memory */
-typedef void *(*swift_allocator_func_t)(size_t size);
-
-/* A function which re-allocates memory */
-typedef void *(*swift_reallocator_func_t)(void *ptr, size_t newsize);
-
-/* A function which de-allocates memory */
-typedef void (*swift_deallocator_func_t)(void *ptr);
+/* A function which allocates, re-allocates or de-allocates memory */
+typedef void *(*swift_allocator_func_t)(void *ptr, size_t newsize);
 
 /* A function which receives curl errors */
 typedef void (*curl_error_callback_t)(const char *curl_funcname, CURLcode res);
@@ -130,20 +124,14 @@ struct swift_context {
 	 */
 	keystone_error_callback_t keystone_error;
 	/**
-	 * Called when this library needs to allocate memory of the given size in bytes.
-	 * If this is NULL at the time swift_start is called, a default allocator will be used.
+	 * Called when this library needs to allocate, re-allocate or free memory.
+	 * If size is zero, the previously-allocated memory at ptr is to be freed.
+	 * If size is non-zero and ptr is NULL, memory of the given size is to be allocated.
+	 * If size is non-zero and ptr is non-NULL, the previously-allocated memory at ptr
+	 * is to be re-allocated to be the given size.
+	 * If this function pointer is NULL at the time swift_start is called, a default re-allocator will be used.
 	 */
 	swift_allocator_func_t allocator;
-	/**
-	 * Called when this library needs to re-allocate memory at the given pointer to be the given size.
-	 * If this is NULL at the time swift_start is called, a default re-allocator will be used.
-	 */
-	swift_reallocator_func_t reallocator;
-	/**
-	 * Called when this library needs to de-allocate memory at the given pointer.
-	 * If this is NULL at the time swift_start is called, a default de-allocator will be used.
-	 */
-	swift_deallocator_func_t deallocator;
 	/* This member (and its members, recursively) are 'private'. */
 	/* They should not be modified by your program unless you *really* know what you're doing. */
 	swift_context_private_t pvt;
