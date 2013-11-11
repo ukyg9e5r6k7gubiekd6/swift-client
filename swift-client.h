@@ -69,7 +69,7 @@ typedef void (*keystone_error_callback_t)(const char *keystone_operation, enum k
 typedef size_t (*supply_data_func_t)(void *ptr, size_t size, size_t nmemb, void *stream);
 
 /* A function which receives data into somewhere of its choice from memory upon demand */
-typedef size_t (*receive_data_func_t)(char *ptr, size_t size, size_t nmemb, void *userdata);
+typedef size_t (*receive_data_func_t)(void *ptr, size_t size, size_t nmemb, void *userdata);
 
 /* swift client library's per-thread private context */
 struct swift_context_private {
@@ -246,7 +246,7 @@ enum swift_error swift_set_object(swift_context_t *context, wchar_t *object_name
 /**
  * Retrieve an object from Swift and pass its data to the given callback function.
  */
-enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive_data_callback);
+enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, void *callback_arg);
 
 /**
  * Create a Swift container with the current container name.
@@ -265,7 +265,7 @@ enum swift_error swift_delete_container(swift_context_t *context);
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, const void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Insert or update an object in Swift using the data in the given-names file.

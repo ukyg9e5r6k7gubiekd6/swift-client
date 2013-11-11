@@ -299,7 +299,7 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 }
 
 /**
- * Set the current Swift server hostname.
+ * Set the current Swift server URL. This must not contain any path information.
  */
 enum swift_error
 swift_set_url(swift_context_t *context, const char *url)
@@ -467,6 +467,181 @@ make_url(swift_context_t *context, enum swift_operation operation)
 	return SCERR_SUCCESS;
 }
 
+static enum keystone_error
+find_keystone_endpoint(swift_context_t *context, struct json_object *endpoints, unsigned int api_version)
+{
+	int endpoint_count;
+
+	assert(context != NULL);
+
+	if (!json_object_is_type(endpoints, json_type_array)) {
+		context->keystone_error("response.access.serviceCatalog[n].endpoints is not an array", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON array */
+	}
+	endpoint_count = json_object_array_length(endpoints);
+	if (endpoint_count < 0) {
+		context->keystone_error("response.access.serviceCatalog[n].endpoints is a negative-length array", KSERR_PARSE);
+		return KSERR_PARSE; /* libjson reports a negative-size array?! */
+	}
+	while (endpoint_count--) {
+		struct json_object *endpoint = json_object_array_get_idx(endpoints, endpoint_count), *endpoint_public_url;
+		if (NULL == endpoint) {
+			context->keystone_error("failed to index into response.access.serviceCatalog[n].endpoints array", KSERR_PARSE);
+			return KSERR_PARSE; /* Failed to retrieve endpoint array entry */
+		}
+		if (!json_object_is_type(endpoint, json_type_object)) {
+			context->keystone_error("response.access.serviceCatalog[n].endpoints[n] is not an array", KSERR_PARSE);
+			return KSERR_PARSE; /* Not the expected JSON object */
+		}
+		if (context->pvt.api_ver != 0) {
+			/* Looking for a certain version of the Swift RESTful API */
+			struct json_object *endpoint_api_version;
+			if (json_object_object_get_ex(endpoint, "versionId", &endpoint_api_version)) {
+				/* Keystone documentation includes a versionID key, but it is not present in the responses I've seen */
+				if (!json_object_is_type(endpoint_api_version, json_type_string)) {
+					context->keystone_error("response.access.serviceCatalog[n].endpoints[n].versionId is not a string", KSERR_PARSE);
+					return KSERR_PARSE; /* Not the expected JSON string */
+				}
+				if (json_object_get_double(endpoint_api_version) != api_version) {
+					continue; /* Not the API version we're after */
+				}
+				/* Found the API version we're after */
+			} else {
+				/* No versionID on service endpoint. Use it anyway */
+			}
+		} else {
+			/* No desired API version currently set, so use the first endpoint found */
+		}
+		if (!json_object_object_get_ex(endpoint, "publicURL", &endpoint_public_url)) {
+			context->keystone_error("response.access.serviceCatalog[n].endpoints[n] lacks a 'publicURL' key", KSERR_PARSE);
+			return KSERR_PARSE; /* Lacking the expected key */
+		}
+		if (!json_object_is_type(endpoint_public_url, json_type_string)) {
+			context->keystone_error("response.access.serviceCatalog[n].endpoints[n].publicURL is not a string", KSERR_PARSE);
+			return KSERR_PARSE; /* Not the expected JSON string */
+		}
+		context->pvt.base_url_len = json_object_get_string_len(endpoint_public_url);
+		context->pvt.base_url = context->allocator(
+			context->pvt.base_url,
+			context->pvt.base_url_len
+			+ 1 /* '\0' */
+		);
+		if (NULL == context->pvt.base_url) {
+			return KSERR_PARSE; /* Allocation failed */
+		}
+		strcpy(context->pvt.base_url, json_object_get_string(endpoint_public_url));
+		return KSERR_SUCCESS;
+	}
+
+	return KSERR_NOTFOUND;
+}
+
+/**
+ * Retrieve the authentication token and Swift URL from a now-complete JSON response.
+ */
+static enum keystone_error
+process_keystone_json(swift_context_t *context, struct json_object *jobj)
+{
+	struct json_object *subobj;
+
+	int service_count;
+	/* json_object_to_file_ext("/dev/stderr", jobj, JSON_C_TO_STRING_PRETTY); */
+	if (!json_object_is_type(jobj, json_type_object)) {
+		context->keystone_error("response not a JSON object", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON object */
+	}
+	/* Authentication token */
+	if (!json_object_object_get_ex(jobj, "access", &subobj)) {
+		context->keystone_error("response lacks 'access' key", KSERR_PARSE);
+		return KSERR_PARSE; /* Lacking the expected key */
+	}
+	if (!json_object_is_type(subobj, json_type_object)) {
+		context->keystone_error("response.access not an object", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON object */
+	}
+	if (!json_object_object_get_ex(subobj, "token", &subobj)) {
+		context->keystone_error("reponse.access lacks 'token' key", KSERR_PARSE);
+		return KSERR_PARSE; /* Lacking the expected key */
+	}
+	if (!json_object_is_type(subobj, json_type_object)) {
+		context->keystone_error("response.access.token not an object", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON object */
+	}
+	if (!json_object_object_get_ex(subobj, "id", &subobj)) {
+		context->keystone_error("response.access.token lacks 'id' key", KSERR_PARSE);
+		return KSERR_PARSE; /* Lacking the expected key */
+	}
+	if (!json_object_is_type(subobj, json_type_string)) {
+		context->keystone_error("response.access.token.id not a string", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON string */
+	}
+	context->pvt.auth_token = context->allocator(
+		context->pvt.auth_token,
+		json_object_get_string_len(subobj)
+		+ 1 /* '\0' */
+	);
+	if (NULL == context->pvt.auth_token) {
+		return KSERR_PARSE; /* Allocation failed */
+	}
+	strcpy(context->pvt.auth_token, json_object_get_string(subobj));
+	/* Swift URL */
+	if (!json_object_object_get_ex(jobj, "access", &subobj)) {
+		context->keystone_error("response lacks 'access' key", KSERR_PARSE);
+		return KSERR_PARSE; /* Lacking the expected key */
+	}
+	if (!json_object_is_type(subobj, json_type_object)) {
+		context->keystone_error("response.access not an object", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON object */
+	}
+	if (!json_object_object_get_ex(subobj, "serviceCatalog", &subobj)) {
+		context->keystone_error("response.access lacks 'serviceCatalog' key", KSERR_PARSE);
+		return KSERR_PARSE; /* Lacking the expected key */
+	}
+	if (!json_object_is_type(subobj, json_type_array)) {
+		context->keystone_error("response.access.serviceCatalog not an array", KSERR_PARSE);
+		return KSERR_PARSE; /* Not the expected JSON array */
+	}
+	service_count = json_object_array_length(subobj);
+	if (service_count < 0) {
+		context->keystone_error("response.access.serviceCatalog is a negative-length array", KSERR_PARSE);
+		return KSERR_PARSE; /* libjson reports a negative-size array?! */
+	}
+	while (service_count--) {
+		struct json_object *service = json_object_array_get_idx(subobj, service_count), *service_subobj;
+		enum keystone_error ks_err;
+		if (NULL == service) {
+			context->keystone_error("failed to index into response.access.serviceCatalog array", KSERR_PARSE);
+			return KSERR_PARSE; /* Failed to retrieve service catalog entry */
+		}
+		if (!json_object_is_type(service, json_type_object)) {
+			context->keystone_error("response.access.serviceCatalog[n] is not an object", KSERR_PARSE);
+			return KSERR_PARSE; /* Not the expected JSON object */
+		}
+		if (!json_object_object_get_ex(service, "type", &service_subobj)) {
+			context->keystone_error("response.access.serviceCatalog[n] lacks a 'type' key", KSERR_PARSE);
+			return KSERR_PARSE; /* Lacking the expected key */
+		}
+		if (!json_object_is_type(service_subobj, json_type_string)) {
+			context->keystone_error("response.access.serviceCatalog[n].type is not a string", KSERR_PARSE);
+			return KSERR_PARSE; /* Not the expected JSON object */
+		}
+		if (0 != strcmp(json_object_get_string(service_subobj), KEYSTONE_SERVICE_TYPE_SWIFT)) {
+			continue; /* Not the service type we're after */
+		}
+		if (!json_object_object_get_ex(service, "endpoints", &service_subobj)) {
+			context->keystone_error("response.access.serviceCatalog[n] lacks an 'endpoints' key", KSERR_PARSE);
+			return KSERR_PARSE; /* Lacking the expected key */
+		}
+		ks_err = find_keystone_endpoint(context, service_subobj, context->pvt.api_ver);
+		if (KSERR_SUCCESS == ks_err) {
+			break;
+		}
+		return KSERR_PARSE;
+	}
+
+	return KSERR_SUCCESS;
+}
+
 /**
  * Process a Keystone authentication response.
  * This parses the response and saves copies of the interesting service endpoint URLs.
@@ -477,160 +652,15 @@ process_keystone_response(void *ptr, size_t size, size_t nmemb, void *userdata)
 	swift_context_t *context = (swift_context_t *) userdata;
 	const char *body = (const char *) ptr;
 	size_t len = size * nmemb;
-	struct json_object *jobj, *subobj;
+	struct json_object *jobj;
 	enum json_tokener_error json_err;
 
 	jobj = json_tokener_parse_ex(context->pvt.json_tokeniser, body, len);
 	json_err = json_tokener_get_error(context->pvt.json_tokeniser);
 	if (json_tokener_success == json_err) {
-		/* Retrieve authentication token and Swift URL from now-complete JSON response */
-		int service_count;
-		json_object_to_file_ext("/dev/stderr", jobj, JSON_C_TO_STRING_PRETTY);
-		if (!json_object_is_type(jobj, json_type_object)) {
-			context->keystone_error("response not a JSON object", KSERR_PARSE);
-			return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-		}
-		/* Authentication token */
-		if (!json_object_object_get_ex(jobj, "access", &subobj)) {
-			context->keystone_error("response lacks 'access' key", KSERR_PARSE);
-			return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_is_type(subobj, json_type_object)) {
-			context->keystone_error("response.access not an object", KSERR_PARSE);
-			return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_object_get_ex(subobj, "token", &subobj)) {
-			context->keystone_error("reponse.access lacks 'token' key", KSERR_PARSE);
-			return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_is_type(subobj, json_type_object)) {
-			context->keystone_error("response.access.token not an object", KSERR_PARSE);
-			return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_object_get_ex(subobj, "id", &subobj)) {
-			context->keystone_error("response.access.token lacks 'id' key", KSERR_PARSE);
-			return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_is_type(subobj, json_type_string)) {
-			context->keystone_error("response.access.token.id not a string", KSERR_PARSE);
-			return 0; /* Not the expected JSON strong. Inform libcurl no data 'handled'. */
-		}
-		context->pvt.auth_token = context->allocator(
-			context->pvt.auth_token,
-			json_object_get_string_len(subobj)
-			+ 1 /* '\0' */
-		);
-		if (NULL == context->pvt.auth_token) {
-			return 0; /* Allocation failed. Inform libcurl no data 'handled' */
-		}
-		strcpy(context->pvt.auth_token, json_object_get_string(subobj));
-		/* Swift URL */
-		if (!json_object_object_get_ex(jobj, "access", &subobj)) {
-			context->keystone_error("response lacks 'access' key", KSERR_PARSE);
-			return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_is_type(subobj, json_type_object)) {
-			context->keystone_error("response.access not an object", KSERR_PARSE);
-			return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_object_get_ex(subobj, "serviceCatalog", &subobj)) {
-			context->keystone_error("response.access lacks 'serviceCatalog' key", KSERR_PARSE);
-			return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-		}
-		if (!json_object_is_type(subobj, json_type_array)) {
-			context->keystone_error("response.access.serviceCatalog not an array", KSERR_PARSE);
-			return 0; /* Not the expected JSON array. Inform libcurl no data 'handled'. */
-		}
-		service_count = json_object_array_length(subobj);
-		if (service_count < 0) {
-			context->keystone_error("response.access.serviceCatalog is a negative-length array", KSERR_PARSE);
-			return 0; /* libjson reports a negative-size array?! */
-		}
-		while (service_count--) {
-			int endpoint_count;
-			struct json_object *service = json_object_array_get_idx(subobj, service_count), *service_subobj;
-			if (NULL == service) {
-				context->keystone_error("failed to index into response.access.serviceCatalog array", KSERR_PARSE);
-				return 0; /* Failed to retrieve service catalog entry. Inform libcurl no data 'handled' */
-			}
-			if (!json_object_is_type(service, json_type_object)) {
-				context->keystone_error("response.access.serviceCatalog[n] is not an object", KSERR_PARSE);
-				return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-			}
-			if (!json_object_object_get_ex(service, "type", &service_subobj)) {
-				context->keystone_error("response.access.serviceCatalog[n] lacks a 'type' key", KSERR_PARSE);
-				return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-			}
-			if (!json_object_is_type(service_subobj, json_type_string)) {
-				context->keystone_error("response.access.serviceCatalog[n].type is not a string", KSERR_PARSE);
-				return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-			}
-			if (0 != strcmp(json_object_get_string(service_subobj), KEYSTONE_SERVICE_TYPE_SWIFT)) {
-				continue; /* Not the service type we're after */
-			}
-			if (!json_object_object_get_ex(service, "endpoints", &service_subobj)) {
-				context->keystone_error("response.access.serviceCatalog[n] lacks an 'endpoints' key", KSERR_PARSE);
-				return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-			}
-			if (!json_object_is_type(service_subobj, json_type_array)) {
-				context->keystone_error("response.access.serviceCatalog[n].endpoints is not an array", KSERR_PARSE);
-				return 0; /* Not the expected JSON array. Inform libcurl no data 'handled'. */
-			}
-			endpoint_count = json_object_array_length(service_subobj);
-			if (endpoint_count < 0) {
-				context->keystone_error("response.access.serviceCatalog[n].endpoints is a negative-length array", KSERR_PARSE);
-				return 0; /* libjson reports a negative-size array?! */
-			}
-			while (endpoint_count--) {
-				struct json_object *endpoint = json_object_array_get_idx(service_subobj, endpoint_count), *endpoint_public_url;
-				if (NULL == endpoint) {
-					context->keystone_error("failed to index into response.access.serviceCatalog[n].endpoints array", KSERR_PARSE);
-					return 0; /* Failed to retrieve endpoint array entry. Inform libcurl no data 'handled' */
-				}
-				if (!json_object_is_type(endpoint, json_type_object)) {
-					context->keystone_error("response.access.serviceCatalog[n].endpoints[n] is not an array", KSERR_PARSE);
-					return 0; /* Not the expected JSON object. Inform libcurl no data 'handled'. */
-				}
-				if (context->pvt.api_ver != 0) {
-					/* Looking for a certain version of the Swift RESTful API */
-					struct json_object *endpoint_api_version;
-					if (json_object_object_get_ex(endpoint, "versionId", &endpoint_api_version)) {
-						/* Keystone documentation includes a versionID key, but it is not present in the responses I've seen */
-						if (!json_object_is_type(endpoint_api_version, json_type_string)) {
-							context->keystone_error("response.access.serviceCatalog[n].endpoints[n].versionId is not a string", KSERR_PARSE);
-							return 0; /* Not the expected JSON string. Inform libcurl no data 'handled'. */
-						}
-						if (json_object_get_double(endpoint_api_version) != context->pvt.api_ver) {
-							continue; /* Not the API version we're after */
-						}
-						/* Found the API version we're after */
-					} else {
-						/* No versionID on service endpoint. Use it anyway */
-					}
-				} else {
-					/* No API version currently set, so use the first endpoint found */
-				}
-				if (!json_object_object_get_ex(endpoint, "publicURL", &endpoint_public_url)) {
-					context->keystone_error("response.access.serviceCatalog[n].endpoints[n] lacks a 'publicURL' key", KSERR_PARSE);
-					return 0; /* Lacking the expected key. Inform libcurl no data 'handled'. */
-				}
-				if (!json_object_is_type(endpoint_public_url, json_type_string)) {
-					context->keystone_error("response.access.serviceCatalog[n].endpoints[n].publicURL is not a string", KSERR_PARSE);
-					return 0; /* Not the expected JSON string. Inform libcurl no data 'handled'. */
-				}
-				context->pvt.base_url_len = json_object_get_string_len(endpoint_public_url);
-				context->pvt.base_url = context->allocator(
-					context->pvt.base_url,
-					context->pvt.base_url_len
-					+ 1 /* '\0' */
-				);
-				if (NULL == context->pvt.base_url) {
-					return 0; /* Allocation failed. Inform libcurl no data 'handled'. */
-				}
-				strcpy(context->pvt.base_url, json_object_get_string(endpoint_public_url));
-				break;
-			}
-			break;
+		enum swift_error sc_err = process_keystone_json(context, jobj);
+		if (sc_err != SCERR_SUCCESS) {
+			return 0; /* Failed to process JSON. Inform libcurl no data 'handled' */
 		}
 	} else if (json_tokener_continue == json_err) {
 		/* Complete JSON response not yet received; continue */
@@ -652,6 +682,15 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 {
 	CURLcode curl_err;
 	struct curl_slist *headers = NULL;
+	size_t body_len =
+		strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_USERNAME)
+		+ strlen(username)
+		+ strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_PASSWORD)
+		+ strlen(password)
+		+ strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_TENANT)
+		+ strlen(tenant_name)
+		+ strlen(KEYSTONE_AUTH_PAYLOAD_END)
+	;
 
 	/* Create or reset the JSON tokeniser */
 	if (NULL == context->pvt.json_tokeniser) {
@@ -686,13 +725,7 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 	/* Generate POST request body containing the authentication credentials */
 	context->pvt.auth_payload = context->allocator(
 		context->pvt.auth_payload,
-		strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_USERNAME)
-		+ strlen(username)
-		+ strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_PASSWORD)
-		+ strlen(password)
-		+ strlen(KEYSTONE_AUTH_PAYLOAD_BEFORE_TENANT)
-		+ strlen(tenant_name)
-		+ strlen(KEYSTONE_AUTH_PAYLOAD_END)
+		body_len
 		+ 1 /* '\0' */
 	);
 	if (NULL == context->pvt.auth_payload) {
@@ -700,13 +733,13 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 		return SCERR_ALLOC_FAILED;
 	}
 	sprintf(context->pvt.auth_payload, "%s%s%s%s%s%s%s",
-			KEYSTONE_AUTH_PAYLOAD_BEFORE_USERNAME,
-			username,
-			KEYSTONE_AUTH_PAYLOAD_BEFORE_PASSWORD,
-			password,
-			KEYSTONE_AUTH_PAYLOAD_BEFORE_TENANT,
-			tenant_name,
-			KEYSTONE_AUTH_PAYLOAD_END
+		KEYSTONE_AUTH_PAYLOAD_BEFORE_USERNAME,
+		username,
+		KEYSTONE_AUTH_PAYLOAD_BEFORE_PASSWORD,
+		password,
+		KEYSTONE_AUTH_PAYLOAD_BEFORE_TENANT,
+		tenant_name,
+		KEYSTONE_AUTH_PAYLOAD_END
 	);
 
 	/* Pass the POST request body to libcurl. The data are not copied, so they must persist during the request lifetime. */
@@ -717,12 +750,21 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 		return SCERR_URL_FAILED;
 	}
 
+#if 0
 	/* Add header specifying length of authentication token POST body */
 	{
 		char content_length_header[16 /* "Content-Length: " */ + 3 /* 999 */ + 1 /* '\0' */];
-		sprintf(content_length_header, "Content-Length: %lu", (unsigned long) strlen(context->pvt.auth_payload));
+		sprintf(content_length_header, "Content-Length: %lu", (unsigned long) body_len);
 		headers = curl_slist_append(headers, content_length_header);
 	}
+#else
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_POSTFIELDSIZE, body_len);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		curl_slist_free_all(headers);
+		return SCERR_URL_FAILED;
+	}
+#endif
 
 	/* Add header requesting response in JSON */
 	headers = curl_slist_append(headers, "Accept: application/json");
@@ -734,14 +776,14 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 		return SCERR_URL_FAILED;
 	}
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEDATA, context);
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, process_keystone_response);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		curl_slist_free_all(headers);
 		return SCERR_URL_FAILED;
 	}
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, process_keystone_response);
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEDATA, context);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		curl_slist_free_all(headers);
@@ -764,12 +806,6 @@ keystone_authenticate(swift_context_t *context, const char *url, const char *ten
 	return SCERR_SUCCESS;
 }
 
-static size_t
-ignore_response(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-	return size * nmemb;
-}
-
 /**
  * Execute a Swift request using the current protocol, hostname, API version, account, container and object,
  * and using the given HTTP method.
@@ -777,7 +813,7 @@ ignore_response(void *ptr, size_t size, size_t nmemb, void *userdata)
  * This function consumes headers.
  */
 static enum swift_error
-swift_request(swift_context_t *context, enum swift_operation operation, struct curl_slist *headers)
+swift_request(swift_context_t *context, enum swift_operation operation, struct curl_slist *headers, supply_data_func_t produce_request_callback, void *produce_request_callback_arg, receive_data_func_t consume_response_callback, void *consume_response_callback_arg)
 {
 	CURLcode curl_err;
 	enum swift_error sc_err;
@@ -788,7 +824,36 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 		return sc_err;
 	}
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, ignore_response);
+	/* FIXME: Failed attempt to prevent libcurl from uselessly using chunked transfer encoding for empty request bodies */
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_POSTFIELDS, NULL);
+	if (CURLE_OK != curl_err) {
+		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_POSTFIELDSIZE, 0);
+	if (CURLE_OK != curl_err) {
+		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, produce_request_callback);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READDATA, produce_request_callback_arg);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, consume_response_callback);
+	if (CURLE_OK != curl_err) {
+		context->curl_error("curl_easy_setopt", curl_err);
+		return SCERR_URL_FAILED;
+	}
+
+	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEDATA, consume_response_callback_arg);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
@@ -810,25 +875,30 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 		switch (operation) {
 		case LIST_CONTAINER:
 		case GET_OBJECT:
+			/* method GET */
 			curl_opt = CURLOPT_HTTPGET;
 			curl_param.longval = 1L;
 			break;
 		case CREATE_CONTAINER:
 		case PUT_OBJECT:
-			curl_opt = CURLOPT_UPLOAD;
+			/* method PUT */
+			curl_opt = CURLOPT_UPLOAD; /* Causes libcurl to use HTTP PUT method */
 			curl_param.longval = 1L;
 			break;
 		case SET_CONTAINER_METADATA:
 		case SET_OBJECT_METADATA:
+			/* method POST */
 			curl_opt = CURLOPT_POST;
 			curl_param.longval = 1L;
 			break;
 		case DELETE_CONTAINER:
 		case DELETE_OBJECT:
-			curl_opt = CURLOPT_CUSTOMREQUEST;
+			/* method DELETE */
+			curl_opt = CURLOPT_CUSTOMREQUEST; /* Causes libcurl to use the given-named HTTP method */
 			curl_param.stringval = "DELETE";
 			break;
 		default:
+			/* Unrecognised Swift operation type */
 			assert(0);
 			return SCERR_INVARG;
 		}
@@ -856,39 +926,51 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 		headers = curl_slist_append(headers, header);
 		context->allocator(header, 0);
 	}
+
+	/* Append pseudo-header defeating libcurl's default addition of an "Expect: 100-continue" header. */
+	headers = curl_slist_append(headers, "Expect:");
+
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, headers);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
 		return SCERR_URL_FAILED;
 	}
+
 	curl_err = curl_easy_perform(context->pvt.curl);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_perform", curl_err);
 		return SCERR_URL_FAILED;
 	}
+
 	curl_slist_free_all(headers);
 
 	return SCERR_SUCCESS;
+}
+
+/* Null response consumer. Completely ignores the entire response */
+static size_t
+ignore_response(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+	return size * nmemb;
+}
+
+/* Null request producer. Supplies a zero-length body */
+static size_t
+empty_request(void *ptr, size_t size, size_t nmemb, void *arg)
+{
+	return 0;
 }
 
 /**
  * Retrieve an object from Swift and pass its data to the given callback function.
  */
 enum swift_error
-swift_get(swift_context_t *context, receive_data_func_t receive_data_callback)
+swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, void *callback_arg)
 {
-	CURLcode curl_err;
-
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_WRITEFUNCTION, receive_data_callback);
-	if (CURLE_OK != curl_err) {
-		context->curl_error("curl_easy_setopt", curl_err);
-		return SCERR_URL_FAILED;
-	}
-
-	return swift_request(context, GET_OBJECT, NULL);
+	return swift_request(context, GET_OBJECT, NULL, empty_request, NULL, receive_data_callback, callback_arg);
 }
 
 /**
@@ -958,7 +1040,9 @@ swift_create_container(swift_context_t *context)
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	return swift_request(context, CREATE_CONTAINER, NULL);
+	/* TODO: Optional container metadata */
+
+	return swift_request(context, CREATE_CONTAINER, NULL, empty_request, NULL, ignore_response, NULL);
 }
 
 /**
@@ -970,7 +1054,7 @@ swift_delete_container(swift_context_t *context)
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	return swift_request(context, DELETE_CONTAINER, NULL);
+	return swift_request(context, DELETE_CONTAINER, NULL, empty_request, NULL, ignore_response, NULL);
 }
 
 /**
@@ -980,48 +1064,26 @@ swift_delete_container(swift_context_t *context)
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
 enum swift_error
-swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, const void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
+swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
-	CURLcode curl_err;
-	struct curl_slist *headers;
+	enum swift_error sc_err;
+	struct curl_slist *headers = NULL;
 
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READFUNCTION, supply_data_callback);
-	if (CURLE_OK != curl_err) {
-		context->curl_error("curl_easy_setopt", curl_err);
-		return SCERR_URL_FAILED;
+	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
+	if (SCERR_SUCCESS != sc_err) {
+		return sc_err;
 	}
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_READDATA, callback_arg);
-	if (CURLE_OK != curl_err) {
-		return SCERR_FILEIO_FAILED;
-	}
-
-	if (0 == metadata_count) {
-		headers = NULL;
-	} else {
-		enum swift_error sc_err;
-
-		curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, NULL);
-		if (CURLE_OK != curl_err) {
-			context->curl_error("curl_easy_setopt", curl_err);
-			return SCERR_URL_FAILED;
-		}
-		sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
-		if (SCERR_SUCCESS != sc_err) {
-			return sc_err;
-		}
-	}
-
-	return swift_request(context, PUT_OBJECT, headers);
+	return swift_request(context, PUT_OBJECT, headers, supply_data_callback, callback_arg, ignore_response, NULL);
 }
 
 static size_t
 supply_data_from_file(void *ptr, size_t size, size_t nmemb, void *stream)
 {
-	return fread(ptr, size, nmemb, stream);
+	return fread(ptr, size, nmemb, (FILE *) stream);
 }
 
 /**
@@ -1061,9 +1123,11 @@ supply_data_from_memory(void *ptr, size_t size, size_t nmemb, void *cookie)
 {
 	struct data_from_mem_args *args = (struct data_from_mem_args *) cookie;
 	size_t len = min(size * nmemb, args->nleft);
+
 	memcpy(ptr, args->ptr, len);
 	args->ptr += len;
 	args->nleft -= len;
+
 	return len;
 }
 
@@ -1092,7 +1156,6 @@ swift_put_data_memory(swift_context_t *context, const unsigned char *ptr, size_t
 enum swift_error
 swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
-	CURLcode curl_err;
 	enum swift_error sc_err;
 	struct curl_slist *headers = NULL;
 
@@ -1104,18 +1167,12 @@ swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_
 		return SCERR_SUCCESS; /* Nothing to do */
 	}
 
-	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_HTTPHEADER, NULL);
-	if (CURLE_OK != curl_err) {
-		context->curl_error("curl_easy_setopt", curl_err);
-		return SCERR_URL_FAILED;
-	}
-
 	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
 	if (SCERR_SUCCESS != sc_err) {
 		return sc_err;
 	}
 
-	return swift_request(context, SET_OBJECT_METADATA, headers);
+	return swift_request(context, SET_OBJECT_METADATA, headers, empty_request, NULL, ignore_response, NULL);
 }
 
 /**
@@ -1127,5 +1184,5 @@ swift_delete_object(swift_context_t *context)
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	return swift_request(context, DELETE_OBJECT, NULL);
+	return swift_request(context, DELETE_OBJECT, NULL, empty_request, NULL, ignore_response, NULL);
 }
