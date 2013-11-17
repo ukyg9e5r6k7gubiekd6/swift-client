@@ -579,6 +579,36 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, v
 	return swift_request(context, GET_OBJECT, NULL, empty_request, NULL, receive_data_callback, callback_arg);
 }
 
+static size_t
+write_data_to_file(void *ptr, size_t size, size_t nmemb, void *stream)
+{
+	return fwrite(ptr, size, nmemb, (FILE *) stream);
+}
+
+/**
+ * Retrieve an object from Swift and place its data in the given-named file.
+ */
+enum swift_error
+swift_get_file(swift_context_t *context, const char *filename)
+{
+	FILE *stream;
+	enum swift_error swift_err;
+
+	stream = fopen(filename, "wb");
+	if (NULL == stream) {
+		swift_err = SCERR_FILEIO_FAILED;
+	} else {
+		swift_err = swift_get(context, write_data_to_file, stream);
+		if (fclose(stream) != 0) {
+			if (SCERR_SUCCESS == swift_err) {
+				swift_err = SCERR_FILEIO_FAILED;
+			}
+		}
+	}
+
+	return swift_err;
+}
+
 /**
  * Add Swift metadata headers to a request.
  * tuple_count specifies the number of {name, value} tuples to be set.
@@ -707,13 +737,14 @@ swift_put_file(swift_context_t *context, const char *filename, size_t metadata_c
 	stream = fopen(filename, "rb");
 	if (NULL == stream) {
 		perror("fopen");
-		return SCERR_FILEIO_FAILED;
-	}
-
-	swift_err = swift_put(context, supply_data_from_file, stream, metadata_count, metadata_names, metadata_values);
-
-	if (fclose(stream) != 0) {
 		swift_err = SCERR_FILEIO_FAILED;
+	} else {
+		swift_err = swift_put(context, supply_data_from_file, stream, metadata_count, metadata_names, metadata_values);
+		if (fclose(stream) != 0) {
+			if (SCERR_SUCCESS == swift_err) {
+				swift_err = SCERR_FILEIO_FAILED;
+			}
+		}
 	}
 
 	return swift_err;

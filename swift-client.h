@@ -210,6 +210,11 @@ enum swift_error swift_set_object(swift_context_t *context, wchar_t *object_name
 enum swift_error swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, void *callback_arg);
 
 /**
+ * Retrieve an object from Swift and place its data in the given-named file.
+ */
+enum swift_error swift_get_file(swift_context_t *context, const char *filename);
+
+/**
  * Create a Swift container with the current container name.
  */
 enum swift_error swift_create_container(swift_context_t *context);
@@ -229,7 +234,7 @@ enum swift_error swift_delete_container(swift_context_t *context);
 enum swift_error swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, void *callback_arg, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
- * Insert or update an object in Swift using the data in the given-names file.
+ * Insert or update an object in Swift using the data in the given-named file.
  * Optionally, also attach a set of metadata {name, value} tuples to the object.
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
