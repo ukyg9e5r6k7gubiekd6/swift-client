@@ -666,12 +666,18 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
  * Create a Swift container with the current container name.
  */
 enum swift_error
-swift_create_container(swift_context_t *context)
+swift_create_container(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
+	enum swift_error sc_err;
+	struct curl_slist *headers = NULL;
+
 	assert(context);
 	assert(context->pvt.auth_token);
 
-	/* TODO: Optional container metadata */
+	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
+	if (SCERR_SUCCESS != sc_err) {
+		return sc_err;
+	}
 
 	return swift_request(context, CREATE_CONTAINER, NULL, empty_request, NULL, ignore_response, NULL);
 }

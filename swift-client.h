@@ -218,7 +218,7 @@ enum swift_error swift_get_file(swift_context_t *context, const char *filename);
 /**
  * Create a Swift container with the current container name.
  */
-enum swift_error swift_create_container(swift_context_t *context);
+enum swift_error swift_create_container(swift_context_t *context, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Delete the Swift container with the current container name.
