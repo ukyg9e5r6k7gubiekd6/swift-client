@@ -10,20 +10,6 @@
 #include <json/json.h>
 
 /**
- * High-level types of errors which can occur while attempting to use Keystone.
- * More detail is available from lower-level libraries (such as curl and libjson)
- * using error callbacks specific to those libraries.
- */
-enum keystone_error {
-	KSERR_SUCCESS     = 0, /* Success */
-	KSERR_INIT_FAILED = 1, /* Initialisation of this library failed */
-	KSERR_URL_FAILED  = 2, /* Network operation on a URL failed */
-	KSERR_REJECTED    = 3, /* Authentication attempt rejected */
-	KSERR_NOTFOUND    = 4, /* Requested service(s) not found in service catalog */
-	KSERR_PARSE       = 5  /* Failed to parse Keystone response */
-};
-
-/**
  * High-level types of errors which can occur while attempting to use Swift.
  * More detail is available from lower-level libraries (such as curl)
  * using error callbacks specific to those libraries.
@@ -59,12 +45,6 @@ typedef void (*curl_error_callback_t)(const char *curl_funcname, CURLcode res);
 /* A function which receives libiconv errors */
 typedef void (*iconv_error_callback_t)(const char *iconv_funcname, int iconv_errno);
 
-/* A function which receives libjson errors */
-typedef void (*json_error_callback_t)(const char *json_funcname, enum json_tokener_error json_err);
-
-/* A function which receives Keystone errors */
-typedef void (*keystone_error_callback_t)(const char *keystone_operation, enum keystone_error keystone_err);
-
 /* A function which supplies data from somewhere of its choice into memory upon demand */
 typedef size_t (*supply_data_func_t)(void *ptr, size_t size, size_t nmemb, void *stream);
 
@@ -81,8 +61,7 @@ struct swift_context_private {
 	unsigned int api_ver; /* Swift API version */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
-	char *auth_payload; /* Authentication POST payload, containing credentials */
-	char *auth_token; /* Authentication token previously obtained from separate authentication service */
+	const char *auth_token; /* Authentication token, usually previously obtained from Keystone. Library does not own this memory. */
 	unsigned int base_url_len; /* Length of base Swift URL, with API version but without account, container or object */
 	char *base_url;   /* Swift base URL, with API version but without account, container or object */
 };
@@ -111,18 +90,6 @@ struct swift_context {
 	 * If this is NULL at the time swift_start is called, a default handler will be used.
 	 */
 	iconv_error_callback_t iconv_error;
-	/**
-	 * Called when a libjson error occurs.
-	 * Your program may set this function in order to perform custom error handling.
-	 * If this is NULL at the time swift_start is called, a default handler will be used.
-	 */
-	json_error_callback_t json_error;
-	/**
-	 * Called when a Keystone error occurs.
-	 * Your program may set this function in order to perform custom error handling.
-	 * If this is NULL at the time swift_start is called, a default handler will be used.
-	 */
-	keystone_error_callback_t keystone_error;
 	/**
 	 * Called when this library needs to allocate, re-allocate or free memory.
 	 * If size is zero, the previously-allocated memory at ptr is to be freed.
@@ -197,12 +164,6 @@ enum swift_error swift_set_debug(swift_context_t *context, unsigned int enable_d
 enum swift_error swift_set_proxy(swift_context_t *context, const char *proxy_url);
 
 /**
- * Authenticate against a Keystone authentication server with the given tenant and user names and password.
- * This yields an authorisation token, which is then used to access all Swift services.
- */
-enum swift_error keystone_authenticate(swift_context_t *context, const char *url, const char *tenant_name, const char *username, const char *password);
-
-/**
  * Set the current Swift server URL. This must not contain any path information.
  */
 enum swift_error swift_set_url(swift_context_t *context, const char *url);
@@ -231,7 +192,7 @@ enum swift_error swift_verify_cert_hostname(swift_context_t *context, unsigned i
  * Set the value of the authentication token to be supplied with requests.
  * This should have have been obtained previously from a separate authentication service.
  */
-enum swift_error swift_set_auth_token(swift_context_t *context, char *auth_token);
+enum swift_error swift_set_auth_token(swift_context_t *context, const char *auth_token);
 
 /**
  * Set the name of the current Swift container.
@@ -281,7 +242,7 @@ enum swift_error swift_put_file(swift_context_t *context, const char *filename, 
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_put_data_memory(swift_context_t *context, const unsigned char *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+enum swift_error swift_put_data(swift_context_t *context, const unsigned char *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Insert or update metadata for the current object.
