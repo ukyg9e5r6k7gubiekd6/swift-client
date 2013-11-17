@@ -7,7 +7,6 @@
 #include <wchar.h>
 #include <iconv.h>
 #include <curl/curl.h>
-#include <json/json.h>
 
 /**
  * High-level types of errors which can occur while attempting to use Swift.
@@ -39,6 +38,9 @@ enum swift_operation {
 /* A function which allocates, re-allocates or de-allocates memory */
 typedef void *(*swift_allocator_func_t)(void *ptr, size_t newsize);
 
+/* A function which receives POSIX errors which set errno */
+typedef void (*errno_callback_t)(const char *funcname, int errno_val);
+
 /* A function which receives curl errors */
 typedef void (*curl_error_callback_t)(const char *curl_funcname, CURLcode res);
 
@@ -55,15 +57,13 @@ typedef size_t (*receive_data_func_t)(void *ptr, size_t size, size_t nmemb, void
 struct swift_context_private {
 	CURL *curl;       /* Handle to curl library's easy interface */
 	iconv_t iconv;    /* iconv library's conversion descriptor */
-	struct json_tokener *json_tokeniser; /* libjson0 library's JSON tokeniser */
 	unsigned int verify_cert_trusted;  /* True if the peer's certificate must chain to a trusted CA, false otherwise */
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
-	unsigned int api_ver; /* Swift API version */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
 	const char *auth_token; /* Authentication token, usually previously obtained from Keystone. Library does not own this memory. */
-	unsigned int base_url_len; /* Length of base Swift URL, with API version but without account, container or object */
-	char *base_url;   /* Swift base URL, with API version but without account, container or object */
+	unsigned int base_url_len; /* Length of Swift base URL, with API version and account, but without container or object */
+	char *base_url;   /* Swift base URL, with API version and account, but without container or object */
 };
 
 typedef struct swift_context_private swift_context_private_t;
@@ -76,8 +76,14 @@ typedef struct swift_context_private swift_context_private_t;
  */
 struct swift_context {
 
-	/* These members are 'public'; your program can (and should) set them at will */
+	/* These members are 'public'; your program may (and should) set them at will */
 
+	/**
+	 * Called when an error occurs with a POSIX API which sets 'errno'.
+	 * Your program may set this function pointer in order to perform custom error handling.
+	 * If this is NULL at the time swift_start is called, a default handler will be used.
+	 */
+	errno_callback_t errno_error;
 	/**
 	 * Called when a libcurl error occurs.
 	 * Your program may set this function pointer in order to perform custom error handling.
@@ -167,11 +173,6 @@ enum swift_error swift_set_proxy(swift_context_t *context, const char *proxy_url
  * Set the current Swift server URL. This must not contain any path information.
  */
 enum swift_error swift_set_url(swift_context_t *context, const char *url);
-
-/**
- * Set the current Swift API version to be spoken with the server.
- */
-enum swift_error swift_set_api_version(swift_context_t *context, unsigned int api_version);
 
 /**
  * Control whether the Swift server should be accessed via HTTPS, or just HTTP.

@@ -15,13 +15,22 @@
 #define SWIFT_METADATA_PREFIX "X-Object-Meta-"
 /* Name of HTTP header used to pass authentication token to Swift server */
 #define SWIFT_AUTH_HEADER_NAME "X-Auth-Token"
-/* Version of Swift API to be used by default */
-#define DEFAULT_SWIFT_API_VER 1
 
 #ifdef min
 #undef min
 #endif
 #define min(a, b) (((a) < (b)) ? (a) : (b))
+
+/**
+ * Default handler for POSIX errors which set errno.
+ */
+static void
+default_errno_callback(const char *funcname, int errno_val)
+{
+	assert(funcname != NULL);
+	errno = errno_val;
+	perror(funcname);
+}
 
 /**
  * Default handler for libcurl errors.
@@ -99,17 +108,18 @@ enum swift_error
 swift_start(swift_context_t *context)
 {
 	assert(context != NULL);
-	if (!context->curl_error) {
+
+	if (NULL == context->errno_error) {
+		context->errno_error = default_errno_callback;
+	}
+	if (NULL == context->curl_error) {
 		context->curl_error = default_curl_error_callback;
 	}
-	if (!context->iconv_error) {
+	if (NULL == context->iconv_error) {
 		context->iconv_error = default_iconv_error_callback;
 	}
-	if (!context->allocator) {
+	if (NULL == context->allocator) {
 		context->allocator = default_allocator;
-	}
-	if (!context->pvt.api_ver) {
-		context->pvt.api_ver = DEFAULT_SWIFT_API_VER;
 	}
 	context->pvt.iconv = iconv_open("UTF-8", "WCHAR_T");
 	if ((iconv_t) -1 == context->pvt.iconv) {
@@ -149,10 +159,6 @@ swift_end(swift_context_t *context)
 	}
 	if (iconv_close(context->pvt.iconv) < 0) {
 		context->iconv_error("iconv_close", errno);
-	}
-	if (context->pvt.json_tokeniser != NULL) {
-		json_tokener_free(context->pvt.json_tokeniser);
-		context->pvt.json_tokeniser = NULL;
 	}
 }
 
@@ -259,17 +265,6 @@ swift_set_url(swift_context_t *context, const char *url)
 }
 
 /**
- * Set the current Swift API version to be spoken with the server.
- */
-enum swift_error
-swift_set_api_version(swift_context_t *context, unsigned int api_version)
-{
-	context->pvt.api_ver = api_version;
-
-	return SCERR_SUCCESS;
-}
-
-/**
  * Control whether an HTTPS server's certificate is required to chain to a trusted CA cert.
  */
 enum swift_error
@@ -342,7 +337,6 @@ make_url(swift_context_t *context, enum swift_operation operation)
 	size_t url_len = context->pvt.base_url_len;
 
 	assert(context != NULL);
-	assert(context->pvt.api_ver != 0);
 	assert(context->pvt.container != NULL);
 	assert(context->pvt.base_url);
 	assert(context->pvt.base_url_len);
@@ -596,6 +590,7 @@ swift_get_file(swift_context_t *context, const char *filename)
 
 	stream = fopen(filename, "wb");
 	if (NULL == stream) {
+		context->errno_error("fopen", errno);
 		swift_err = SCERR_FILEIO_FAILED;
 	} else {
 		swift_err = swift_get(context, write_data_to_file, stream);
@@ -736,7 +731,7 @@ swift_put_file(swift_context_t *context, const char *filename, size_t metadata_c
 
 	stream = fopen(filename, "rb");
 	if (NULL == stream) {
-		perror("fopen");
+		context->errno_error("fopen", errno);
 		swift_err = SCERR_FILEIO_FAILED;
 	} else {
 		swift_err = swift_put(context, supply_data_from_file, stream, metadata_count, metadata_names, metadata_values);
