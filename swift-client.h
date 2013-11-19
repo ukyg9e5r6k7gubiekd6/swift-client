@@ -248,7 +248,7 @@ enum swift_error swift_put_file(swift_context_t *context, const char *filename, 
  * metadata_count specifies the number of {name, value} tuples to be set. This may be zero.
  * If metadata_count is non-zero, metadata_names and metadata_values must be arrays, each of length metadata_count, specifying the {name, value} tuples.
  */
-enum swift_error swift_put_data(swift_context_t *context, const unsigned char *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
+enum swift_error swift_put_data(swift_context_t *context, const void *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values);
 
 /**
  * Insert or update metadata for the current object.
