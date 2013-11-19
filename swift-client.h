@@ -61,7 +61,7 @@ struct swift_context_private {
 	unsigned int verify_cert_hostname; /* True if the peer's certificate's hostname must be correct, false otherwise */
 	char *container;  /* Name of current container */
 	char *object;     /* Name of current object */
-	const char *auth_token; /* Authentication token, usually previously obtained from Keystone. Library does not own this memory. */
+	char *auth_token; /* Authentication token, usually previously obtained from Keystone */
 	unsigned int base_url_len; /* Length of Swift base URL, with API version and account, but without container or object */
 	char *base_url;   /* Swift base URL, with API version and account, but without container or object */
 };

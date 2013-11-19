@@ -148,6 +148,9 @@ swift_end(swift_context_t *context)
 	assert(context != NULL);
 	curl_easy_cleanup(context->pvt.curl);
 	context->pvt.curl = NULL;
+	if (context->pvt.auth_token != NULL) {
+		context->pvt.auth_token = context->allocator(context->pvt.auth_token, 0);
+	}
 	if (context->pvt.base_url != NULL) {
 		context->pvt.base_url = context->allocator(context->pvt.base_url, 0);
 	}
@@ -305,7 +308,14 @@ swift_verify_cert_hostname(swift_context_t *context, unsigned int require_matchi
 enum swift_error
 swift_set_auth_token(swift_context_t *context, const char *auth_token)
 {
-	context->pvt.auth_token = auth_token;
+	assert(context != NULL);
+	assert(auth_token != NULL);
+
+	context->pvt.auth_token = context->allocator(context->pvt.auth_token, strlen(auth_token) + 1 /* '\0' */);
+	if (NULL == context->pvt.auth_token) {
+		return SCERR_ALLOC_FAILED;
+	}
+	strcpy(context->pvt.auth_token, auth_token);
 
 	return SCERR_SUCCESS;
 }
