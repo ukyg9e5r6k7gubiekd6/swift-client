@@ -146,6 +146,7 @@ void
 swift_end(swift_context_t *context)
 {
 	assert(context != NULL);
+
 	curl_easy_cleanup(context->pvt.curl);
 	context->pvt.curl = NULL;
 	if (context->pvt.auth_token != NULL) {
@@ -174,6 +175,8 @@ swift_set_proxy(swift_context_t *context, const char *proxy_url)
 {
 	CURLcode curl_err;
 
+	assert(context != NULL);
+
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_PROXY, (NULL == proxy_url) ? "" : proxy_url);
 	if (CURLE_OK != curl_err) {
 		context->curl_error("curl_easy_setopt", curl_err);
@@ -191,6 +194,8 @@ enum swift_error
 swift_set_debug(swift_context_t *context, unsigned int enable_debugging)
 {
 	CURLcode curl_err;
+
+	assert(context != NULL);
 
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_VERBOSE, enable_debugging ? 1 : 0);
 	if (CURLE_OK != curl_err) {
@@ -215,6 +220,7 @@ utf8_and_url_encode(swift_context_t *context, const wchar_t *in, char **out)
 	assert(context != NULL);
 	assert(in != NULL);
 	assert(out != NULL);
+
 	/* Convert the wchar_t input to UTF-8 and write the result to out */
 	in_len = wcslen(in);
 	utf8_in_len = in_len * UTF8_SEQUENCE_MAXLEN; /* Assuming worst-case UTF-8 expansion */
@@ -256,6 +262,8 @@ swift_set_url(swift_context_t *context, const char *url)
 {
 	size_t url_len;
 
+	assert(context != NULL);
+
 	url_len = strlen(url);
 	context->pvt.base_url = context->allocator(context->pvt.base_url, url_len + 1 /* '\0' */);
 	if (NULL == context->pvt.base_url) {
@@ -274,6 +282,8 @@ enum swift_error
 swift_verify_cert_trusted(swift_context_t *context, unsigned int require_trusted_cert)
 {
 	CURLcode curl_err;
+
+	assert(context != NULL);
 
 	curl_err = curl_easy_setopt(context->pvt.curl, CURLOPT_SSL_VERIFYPEER, (long) require_trusted_cert);
 	if (CURLE_OK != curl_err) {
@@ -326,6 +336,8 @@ swift_set_auth_token(swift_context_t *context, const char *auth_token)
 enum swift_error
 swift_set_container(swift_context_t *context, wchar_t *container_name)
 {
+	assert(context != NULL);
+	assert(container_name != NULL);
 	return utf8_and_url_encode(context, container_name, &context->pvt.container);
 }
 
@@ -335,6 +347,8 @@ swift_set_container(swift_context_t *context, wchar_t *container_name)
 enum swift_error
 swift_set_object(swift_context_t *context, wchar_t *object_name)
 {
+	assert(context != NULL);
+	assert(object_name != NULL);
 	return utf8_and_url_encode(context, object_name, &context->pvt.object);
 }
 
@@ -348,7 +362,7 @@ make_url(swift_context_t *context, enum swift_operation operation)
 
 	assert(context != NULL);
 	assert(context->pvt.container != NULL);
-	assert(context->pvt.base_url);
+	assert(context->pvt.base_url != NULL);
 	assert(context->pvt.base_url_len);
 
 	switch (operation) {
@@ -425,6 +439,7 @@ swift_request(swift_context_t *context, enum swift_operation operation, struct c
 	enum swift_error sc_err;
 
 	assert(context != NULL);
+
 	sc_err = make_url(context, operation);
 	if (sc_err != SCERR_SUCCESS) {
 		return sc_err;
@@ -577,8 +592,9 @@ empty_request(void *ptr, size_t size, size_t nmemb, void *arg)
 enum swift_error
 swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, void *callback_arg)
 {
-	assert(context);
-	assert(context->pvt.auth_token);
+	assert(context != NULL);
+	assert(context->pvt.auth_token != NULL);
+	assert(receive_data_callback != NULL);
 
 	return swift_request(context, GET_OBJECT, NULL, empty_request, NULL, receive_data_callback, callback_arg);
 }
@@ -586,6 +602,9 @@ swift_get(swift_context_t *context, receive_data_func_t receive_data_callback, v
 static size_t
 write_data_to_file(void *ptr, size_t size, size_t nmemb, void *stream)
 {
+	assert(ptr != NULL);
+	assert(stream != NULL);
+
 	return fwrite(ptr, size, nmemb, (FILE *) stream);
 }
 
@@ -597,6 +616,9 @@ swift_get_file(swift_context_t *context, const char *filename)
 {
 	FILE *stream;
 	enum swift_error swift_err;
+
+	assert(context != NULL);
+	assert(filename != NULL);
 
 	stream = fopen(filename, "wb");
 	if (NULL == stream) {
@@ -620,19 +642,23 @@ swift_get_file(swift_context_t *context, const char *filename)
  * names and values must be arrays, each of length tuple_count, specifying the names and values respectively.
  * */
 static enum swift_error
-add_metadata_headers(struct swift_context *context, struct curl_slist **headers, size_t tuple_count, const wchar_t **names, const wchar_t **values)
+add_metadata_headers(struct swift_context *context, struct curl_slist **headers, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
 	char *header, *iconv_in, *iconv_out;
 	size_t iconv_in_len, iconv_out_len;
 
+	assert(context != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
+
 	header = NULL;
-	while (tuple_count--) {
+	while (metadata_count--) {
 		header = context->allocator(
 			header,
 			strlen(SWIFT_METADATA_PREFIX)
-			+ wcslen(names[tuple_count]) * UTF8_SEQUENCE_MAXLEN /* Assume worst-case expansion */
+			+ wcslen(metadata_names[metadata_count]) * UTF8_SEQUENCE_MAXLEN /* Assume worst-case expansion */
 			+ 2 /* ": " */
-			+ wcslen(values[tuple_count]) * UTF8_SEQUENCE_MAXLEN /* Assume worst-case expansion */
+			+ wcslen(metadata_values[metadata_count]) * UTF8_SEQUENCE_MAXLEN /* Assume worst-case expansion */
 			+ 1 /* '\0' */
 		);
 		if (NULL == header) {
@@ -642,10 +668,10 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 		}
 		strcpy(header, SWIFT_METADATA_PREFIX);
 		/* NOTE: OpenStack Swift docs don't mention converting name and value to UTF-8, but we do it anyway */
-		iconv_in = (char *) names[tuple_count];
-		iconv_in_len = (wcslen(names[tuple_count]) + 1) * sizeof(wchar_t); /* iconv counts in bytes not chars */
+		iconv_in = (char *) metadata_names[metadata_count];
+		iconv_in_len = (wcslen(metadata_names[metadata_count]) + 1) * sizeof(wchar_t); /* iconv counts in bytes not chars */
 		iconv_out = &header[strlen(header)];
-		iconv_out_len = wcslen(names[tuple_count]) * UTF8_SEQUENCE_MAXLEN + 1 /* '\0' */;
+		iconv_out_len = wcslen(metadata_names[metadata_count]) * UTF8_SEQUENCE_MAXLEN + 1 /* '\0' */;
 		if ((size_t) -1 == iconv(context->pvt.iconv, &iconv_in, &iconv_in_len, &iconv_out, &iconv_out_len)) {
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
@@ -654,10 +680,10 @@ add_metadata_headers(struct swift_context *context, struct curl_slist **headers,
 			return SCERR_INVARG;
 		}
 		strcat(header, ": ");
-		iconv_in = (char *) values[tuple_count];
-		iconv_in_len = (wcslen(values[tuple_count]) + 1) * sizeof(wchar_t); /* iconv counts in bytes not chars */
+		iconv_in = (char *) metadata_values[metadata_count];
+		iconv_in_len = (wcslen(metadata_values[metadata_count]) + 1) * sizeof(wchar_t); /* iconv counts in bytes not chars */
 		iconv_out = &header[strlen(header)];
-		iconv_out_len = wcslen(values[tuple_count]) * UTF8_SEQUENCE_MAXLEN + 1 /* '\0' */;
+		iconv_out_len = wcslen(metadata_values[metadata_count]) * UTF8_SEQUENCE_MAXLEN + 1 /* '\0' */;
 		if ((size_t) -1 == iconv(context->pvt.iconv, &iconv_in, &iconv_in_len, &iconv_out, &iconv_out_len)) {
 			/* This should be impossible, as all wchar_t values should be expressible in UTF-8 */
 			context->iconv_error("iconv", errno);
@@ -681,8 +707,10 @@ swift_create_container(swift_context_t *context, size_t metadata_count, const wc
 	enum swift_error sc_err;
 	struct curl_slist *headers = NULL;
 
-	assert(context);
-	assert(context->pvt.auth_token);
+	assert(context != NULL);
+	assert(context->pvt.auth_token != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
 
 	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
 	if (SCERR_SUCCESS != sc_err) {
@@ -698,8 +726,8 @@ swift_create_container(swift_context_t *context, size_t metadata_count, const wc
 enum swift_error
 swift_delete_container(swift_context_t *context)
 {
-	assert(context);
-	assert(context->pvt.auth_token);
+	assert(context != NULL);
+	assert(context->pvt.auth_token != NULL);
 
 	return swift_request(context, DELETE_CONTAINER, NULL, empty_request, NULL, ignore_response, NULL);
 }
@@ -716,8 +744,10 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, voi
 	enum swift_error sc_err;
 	struct curl_slist *headers = NULL;
 
-	assert(context);
-	assert(context->pvt.auth_token);
+	assert(context != NULL);
+	assert(context->pvt.auth_token != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
 
 	sc_err = add_metadata_headers(context, &headers, metadata_count, metadata_names, metadata_values);
 	if (SCERR_SUCCESS != sc_err) {
@@ -730,6 +760,8 @@ swift_put(swift_context_t *context, supply_data_func_t supply_data_callback, voi
 static size_t
 supply_data_from_file(void *ptr, size_t size, size_t nmemb, void *stream)
 {
+	assert(ptr != NULL);
+	assert(stream != NULL);
 	return fread(ptr, size, nmemb, (FILE *) stream);
 }
 
@@ -744,6 +776,11 @@ swift_put_file(swift_context_t *context, const char *filename, size_t metadata_c
 {
 	FILE *stream;
 	enum swift_error swift_err;
+
+	assert(context != NULL);
+	assert(filename != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
 
 	stream = fopen(filename, "rb");
 	if (NULL == stream) {
@@ -772,6 +809,8 @@ supply_data_from_memory(void *ptr, size_t size, size_t nmemb, void *cookie)
 	struct data_from_mem_args *args = (struct data_from_mem_args *) cookie;
 	size_t len = min(size * nmemb, args->nleft);
 
+	assert(ptr != NULL);
+
 	memcpy(ptr, args->ptr, len);
 	args->ptr += len;
 	args->nleft -= len;
@@ -789,6 +828,10 @@ enum swift_error
 swift_put_data(swift_context_t *context, const void *ptr, size_t size, size_t metadata_count, const wchar_t **metadata_names, const wchar_t **metadata_values)
 {
 	struct data_from_mem_args args;
+
+	assert(context != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
 
 	args.ptr = ptr;
 	args.nleft = size;
@@ -808,8 +851,8 @@ swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_
 	struct curl_slist *headers = NULL;
 
 	assert(context != NULL);
-	assert(metadata_names != NULL);
-	assert(metadata_values != NULL);
+	assert((0 == metadata_count) || (metadata_names != NULL));
+	assert((0 == metadata_count) || (metadata_values != NULL));
 
 	if (0 == metadata_count) {
 		return SCERR_SUCCESS; /* Nothing to do */
@@ -829,8 +872,8 @@ swift_set_metadata(swift_context_t *context, size_t metadata_count, const wchar_
 enum swift_error
 swift_delete_object(swift_context_t *context)
 {
-	assert(context);
-	assert(context->pvt.auth_token);
+	assert(context != NULL);
+	assert(context->pvt.auth_token != NULL);
 
 	return swift_request(context, DELETE_OBJECT, NULL, empty_request, NULL, ignore_response, NULL);
 }
