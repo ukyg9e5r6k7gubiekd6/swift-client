@@ -25,14 +25,14 @@ enum swift_error {
 
 /* Operations supported by Swift */
 enum swift_operation {
-	CREATE_CONTAINER,
-	LIST_CONTAINER,
-	SET_CONTAINER_METADATA,
-	DELETE_CONTAINER,
-	PUT_OBJECT,
-	GET_OBJECT,
-	SET_OBJECT_METADATA,
-	DELETE_OBJECT
+	CREATE_CONTAINER       = 0,
+	LIST_CONTAINER         = 1,
+	SET_CONTAINER_METADATA = 2,
+	DELETE_CONTAINER       = 3,
+	PUT_OBJECT             = 4,
+	GET_OBJECT             = 5,
+	SET_OBJECT_METADATA    = 6,
+	DELETE_OBJECT          = 7
 };
 
 /* A function which allocates, re-allocates or de-allocates memory */
@@ -98,7 +98,8 @@ struct swift_context {
 	iconv_error_callback_t iconv_error;
 	/**
 	 * Called when this library needs to allocate, re-allocate or free memory.
-	 * If size is zero, the previously-allocated memory at ptr is to be freed.
+	 * If size is zero and ptr is NULL, nothing is done.
+	 * If size is zero and ptr is non-NULL, the previously-allocated memory at ptr is to be freed.
 	 * If size is non-zero and ptr is NULL, memory of the given size is to be allocated.
 	 * If size is non-zero and ptr is non-NULL, the previously-allocated memory at ptr
 	 * is to be re-allocated to be the given size.
@@ -133,7 +134,7 @@ enum swift_error swift_global_init(void);
  * after all secondary threads (if any) have exited,
  * so that there is precisely one thread in your program at the time of the call.
  * This library must not be used by your program after this function is called.
- * This function must be called exactly once for each successful prior call to swift_init
+ * This function must be called exactly once for each successful prior call to swift_global_init
  * by your program.
  * These restrictions are imposed by libcurl, and the libcurl restrictions are in turn
  * imposed by the libraries that libcurl uses.
