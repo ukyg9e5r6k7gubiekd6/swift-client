@@ -1,7 +1,6 @@
 #ifndef SWIFT_CLIENT_H_
 #define SWIFT_CLIENT_H_
 
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <malloc.h>
 #include <wchar.h>
